@@ -1,0 +1,130 @@
+<Window
+    x:Class="Clipline.TrimWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Title bar -->
+        <Grid x:Name="TitleBar" Padding="16,0,0,0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Image Width="20" Height="20" Source="ms-appx:///Assets/Clipline-titlebar.png" />
+            <TextBlock
+                x:Name="TitleText"
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                TextTrimming="CharacterEllipsis" />
+        </Grid>
+
+        <!-- The recording -->
+        <Border
+            Grid.Row="1"
+            Margin="16,0,16,0"
+            Background="Black"
+            CornerRadius="8">
+            <MediaPlayerElement
+                x:Name="Player"
+                AreTransportControlsEnabled="False"
+                Stretch="Uniform" />
+        </Border>
+
+        <!-- Play, the kept range, and the times -->
+        <Grid
+            Grid.Row="2"
+            Padding="16,16,16,4"
+            ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button
+                x:Name="PlayButton"
+                Width="40"
+                Height="40"
+                Padding="0"
+                CornerRadius="20"
+                IsEnabled="False"
+                ToolTipService.ToolTip="播放或暂停 (空格)">
+                <FontIcon x:Name="PlayIcon" FontSize="14" Glyph="&#xE768;" />
+            </Button>
+            <StackPanel Grid.Column="1" Spacing="2">
+                <toolkit:RangeSelector
+                    x:Name="Range"
+                    IsEnabled="False"
+                    Maximum="1"
+                    Minimum="0"
+                    RangeEnd="1"
+                    RangeStart="0"
+                    StepFrequency="0.05" />
+                <Grid>
+                    <TextBlock
+                        x:Name="StartText"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}" />
+                    <TextBlock
+                        x:Name="KeptText"
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource CaptionTextBlockStyle}" />
+                    <TextBlock
+                        x:Name="EndText"
+                        HorizontalAlignment="Right"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}" />
+                </Grid>
+            </StackPanel>
+        </Grid>
+
+        <!-- Footer -->
+        <Grid
+            Grid.Row="3"
+            Padding="16,12,16,16"
+            ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <InfoBar
+                x:Name="Problem"
+                IsClosable="True"
+                IsOpen="False"
+                Severity="Error" />
+            <StackPanel
+                x:Name="Saving"
+                Orientation="Horizontal"
+                Spacing="12"
+                Visibility="Collapsed">
+                <ProgressRing Width="20" Height="20" IsIndeterminate="True" />
+                <TextBlock VerticalAlignment="Center" Text="正在保存…" />
+                <ProgressBar
+                    x:Name="SaveProgress"
+                    Width="160"
+                    VerticalAlignment="Center"
+                    Maximum="100" />
+            </StackPanel>
+            <Button
+                x:Name="CancelButton"
+                Grid.Column="1"
+                MinWidth="96"
+                Content="取消" />
+            <Button
+                x:Name="SaveButton"
+                Grid.Column="2"
+                MinWidth="96"
+                Content="保存"
+                IsEnabled="False"
+                Style="{StaticResource AccentButtonStyle}" />
+        </Grid>
+    </Grid>
+</Window>

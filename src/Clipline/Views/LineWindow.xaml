@@ -1,0 +1,188 @@
+<Window
+    x:Class="Clipline.LineWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Clipline"
+    Title="Clipline">
+
+    <Grid x:Name="Root" Background="Transparent">
+        <Grid.Resources>
+            <Style x:Key="MoreChipStyle" TargetType="Border">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Setter Property="Padding" Value="12,7" />
+                <Setter Property="CornerRadius" Value="15" />
+                <Setter Property="Background" Value="{ThemeResource GlassBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource GlassEdgeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+            </Style>
+            <Style x:Key="MoreChipText" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{ThemeResource HintBrush}" />
+            </Style>
+            <Style x:Key="ModeCountText" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11.5" />
+                <Setter Property="Foreground" Value="{ThemeResource HintBrush}" />
+                <Setter Property="Opacity" Value="0.55" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+        </Grid.Resources>
+
+        <!-- Everything that slides down from the top edge -->
+        <Grid x:Name="Strip" VerticalAlignment="Top">
+            <!-- A pale halo under the rope keeps it visible on dark and busy wallpapers. -->
+            <Path
+                x:Name="RopeHalo"
+                Stroke="{ThemeResource RopeHaloBrush}"
+                StrokeLineJoin="Round"
+                StrokeThickness="4" />
+            <Path
+                x:Name="RopePath"
+                Stroke="{ThemeResource RopeBrush}"
+                StrokeLineJoin="Round"
+                StrokeThickness="2" />
+
+            <Canvas x:Name="Photos" />
+
+            <!-- How many more hang out of view at each end. A click turns a page,
+                 and so does the mouse wheel anywhere on the line. -->
+            <Canvas>
+                <Border
+                    x:Name="NewerChip"
+                    Style="{StaticResource MoreChipStyle}"
+                    ToolTipService.ToolTip="较新的截图">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="10" Glyph="&#xE76B;" Foreground="{ThemeResource HintBrush}" />
+                        <TextBlock x:Name="NewerCount" Style="{StaticResource MoreChipText}" />
+                    </StackPanel>
+                </Border>
+                <Border
+                    x:Name="OlderChip"
+                    Style="{StaticResource MoreChipStyle}"
+                    ToolTipService.ToolTip="更早的截图">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock x:Name="OlderCount" Style="{StaticResource MoreChipText}" />
+                        <FontIcon FontSize="10" Glyph="&#xE76C;" Foreground="{ThemeResource HintBrush}" />
+                    </StackPanel>
+                </Border>
+            </Canvas>
+
+            <!-- Under the line: which side of it is showing, captures or copied
+                 text, and how many of each there are. -->
+            <Canvas>
+                <Border
+                    x:Name="ModeSwitch"
+                    Padding="3"
+                    Background="{ThemeResource GlassBrush}"
+                    BorderBrush="{ThemeResource GlassEdgeBrush}"
+                    BorderThickness="1"
+                    CornerRadius="17"
+                    Visibility="Collapsed">
+                    <Border.Shadow>
+                        <ThemeShadow />
+                    </Border.Shadow>
+                    <Grid>
+                        <Border
+                            x:Name="ModeThumb"
+                            HorizontalAlignment="Left"
+                            Background="{ThemeResource ThumbBrush}"
+                            BorderBrush="{ThemeResource ThumbEdgeBrush}"
+                            BorderThickness="0.5"
+                            CornerRadius="14" />
+                        <StackPanel Orientation="Horizontal">
+                            <Grid x:Name="PhotosTab" Height="28" Background="Transparent" ToolTipService.ToolTip="截图和录屏">
+                                <StackPanel
+                                    x:Name="PhotosTabContent"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="6">
+                                    <FontIcon FontSize="12" Foreground="{ThemeResource HintBrush}" Glyph="&#xE91B;" />
+                                    <TextBlock Style="{StaticResource MoreChipText}" Text="截图" />
+                                    <TextBlock x:Name="PhotosCount" Style="{StaticResource ModeCountText}" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid x:Name="NotesTab" Height="28" Background="Transparent" ToolTipService.ToolTip="复制过的文字">
+                                <StackPanel
+                                    x:Name="NotesTabContent"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="6">
+                                    <FontIcon FontSize="12" Foreground="{ThemeResource HintBrush}" Glyph="&#xE70B;" />
+                                    <TextBlock Style="{StaticResource MoreChipText}" Text="文字" />
+                                    <TextBlock x:Name="NotesCount" Style="{StaticResource ModeCountText}" />
+                                </StackPanel>
+                            </Grid>
+                            <!-- Searching the copied text, on that side only. -->
+                            <StackPanel
+                                x:Name="SearchArea"
+                                Margin="4,0,0,0"
+                                Orientation="Horizontal"
+                                Visibility="Collapsed">
+                                <Rectangle
+                                    Width="1"
+                                    Height="16"
+                                    Margin="0,0,2,0"
+                                    VerticalAlignment="Center"
+                                    Fill="{ThemeResource GlassEdgeBrush}" />
+                                <Grid
+                                    x:Name="SearchButton"
+                                    Width="32"
+                                    Height="28"
+                                    Background="Transparent"
+                                    ToolTipService.ToolTip="搜索复制过的文字">
+                                    <FontIcon
+                                        x:Name="SearchGlyph"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource HintBrush}"
+                                        Glyph="&#xE721;"
+                                        Opacity="0.85" />
+                                </Grid>
+                                <TextBox
+                                    x:Name="SearchBox"
+                                    Width="190"
+                                    MinHeight="28"
+                                    Padding="8,4,8,4"
+                                    VerticalAlignment="Center"
+                                    FontSize="13"
+                                    PlaceholderText="关键字，回车复制第一条"
+                                    Visibility="Collapsed" />
+                                <TextBlock
+                                    x:Name="SearchCount"
+                                    Margin="8,0,8,0"
+                                    Style="{StaticResource ModeCountText}"
+                                    Visibility="Collapsed" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Canvas>
+
+            <Border
+                x:Name="EmptyHint"
+                Padding="16,8"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Background="{ThemeResource GlassBrush}"
+                BorderBrush="{ThemeResource GlassEdgeBrush}"
+                BorderThickness="1"
+                CornerRadius="16"
+                Translation="0,0,16">
+                <Border.Shadow>
+                    <ThemeShadow />
+                </Border.Shadow>
+                <TextBlock
+                    x:Name="EmptyHintText"
+                    FontSize="13"
+                    Foreground="{ThemeResource HintBrush}"
+                    Text="截个图试试 · Win+Shift+S 或 Win+PrtScn" />
+            </Border>
+
+            <!-- A note held up to read in full, in front of everything. -->
+            <Canvas>
+                <local:NoteReader x:Name="Reader" />
+            </Canvas>
+        </Grid>
+    </Grid>
+</Window>

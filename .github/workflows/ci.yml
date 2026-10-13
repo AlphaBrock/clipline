@@ -1,0 +1,48 @@
+# Compiles pull requests for both architectures, and warns when the
+# version has no section in CHANGELOG.md yet. Pushes to main build nothing;
+# packaging and publishing happen in release.yml, when a v* tag is pushed.
+
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: |
+          $platform = if ('${{ matrix.arch }}' -eq 'arm64') { 'ARM64' } else { 'x64' }
+          dotnet build src/Clipline/Clipline.csproj -c Release -r win-${{ matrix.arch }} -p:Platform=$platform -nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+
+      - name: Check the changelog
+        if: matrix.arch == 'x64'
+        run: |
+          . ./build/version.ps1
+          $version = Get-CliplineVersion
+          if (-not (Get-ReleaseNotes -Version $version)) {
+            Write-Host "::warning file=CHANGELOG.md::CHANGELOG.md has no section for $version yet; release.yml will refuse to publish it."
+          }

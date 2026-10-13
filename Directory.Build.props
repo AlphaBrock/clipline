@@ -1,0 +1,13 @@
+<Project>
+  <!-- The one place the version lives. The app shows it, the MSIX gets it as
+       x.y.z.0, and the release workflow checks the tag against it.
+       Every version here needs a section in CHANGELOG.md. -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Product>Clipline</Product>
+    <Company>Clipline</Company>
+    <Copyright>MIT License</Copyright>
+    <!-- The about section's project page and releases links. -->
+    <RepositoryUrl>https://github.com/AlphaBrock/clipline</RepositoryUrl>
+  </PropertyGroup>
+</Project>

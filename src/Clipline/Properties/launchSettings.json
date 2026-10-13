@@ -1,0 +1,14 @@
+{
+  "profiles": {
+    "Clipline": {
+      "commandName": "Project"
+    },
+    "Clipline (settings)": {
+      "commandName": "Project",
+      "commandLineArgs": "--settings"
+    },
+    "Clipline (MSIX)": {
+      "commandName": "MsixPackage"
+    }
+  }
+}

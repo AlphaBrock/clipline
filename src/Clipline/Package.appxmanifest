@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MSIX manifest. The build copies it and fills in Identity's Version
+     (from Directory.Build.props) and Publisher (MsixPublisher, which must
+     match the signing certificate), so the values here are placeholders. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop rescap">
+
+  <Identity Name="Clipline" Publisher="CN=Clipline" Version="0.0.0.0" />
+
+  <Properties>
+    <DisplayName>Clipline</DisplayName>
+    <PublisherDisplayName>Clipline</PublisherDisplayName>
+    <Logo>Assets\Package\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="Clipline"
+        Description="把截图和录屏挂在屏幕顶边的一根绳子上"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Package\Square150x150Logo.png"
+        Square44x44Logo="Assets\Package\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Package\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- A package cannot write to the Run key; this is its way of
+             launching at sign-in. See SignInLaunch.cs. -->
+        <desktop:Extension Category="windows.startupTask" Executable="Clipline.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="CliplineStartup" Enabled="false" DisplayName="Clipline" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

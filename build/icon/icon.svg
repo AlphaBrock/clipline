@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The Clipline icon, the one drawing every size is rendered from: two
+       prints pegged to a cotton line, a screenshot in front and a screen
+       recording behind. The shapes are bold enough for the 16 px tray; the
+       finer touches (twist, grain, glow, shadows) only show when it is large.
+       Outlines are 1 device pixel at every size. make-icon.ps1 renders it. -->
+  <defs>
+    <filter id="drop" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="0.6" stdDeviation="0.7" flood-color="#1b1430" flood-opacity="0.22"/>
+    </filter>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eceff6"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f4bd8"/>
+      <stop offset="0.6" stop-color="#4f7dfb"/>
+      <stop offset="1" stop-color="#5fd0ea"/>
+    </linearGradient>
+    <radialGradient id="screenGlow" cx="0.2" cy="0.1" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="reel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb35c"/>
+      <stop offset="0.5" stop-color="#ff7a59"/>
+      <stop offset="1" stop-color="#e8406f"/>
+    </linearGradient>
+    <radialGradient id="reelGlow" cx="0.75" cy="0.05" r="0.8">
+      <stop offset="0" stop-color="#fff3d6" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#fff3d6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f7d394"/>
+      <stop offset="0.45" stop-color="#e3a75c"/>
+      <stop offset="1" stop-color="#b36b2c"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6f8"/>
+      <stop offset="0.5" stop-color="#b4bcc5"/>
+      <stop offset="1" stop-color="#6c7480"/>
+    </linearGradient>
+    <pattern id="twist" width="0.9" height="0.9" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)">
+      <rect width="0.3" height="0.9" fill="#8f7b61" fill-opacity="0.4"/>
+    </pattern>
+
+    <path id="line" d="M0.5 4.6 Q16 9.6 31.5 3.1"/>
+
+    <!-- A wooden clothespin; its jaws close on the line at (0, 0). -->
+    <g id="peg">
+      <rect x="-1.7" y="-5.4" width="3.4" height="8.4" rx="0.9" fill="url(#wood)"/>
+      <path d="M-1.25 -4.6 V2.2" stroke="#fff6e2" stroke-opacity="0.6" stroke-width="0.3" stroke-linecap="round"/>
+      <path d="M0 -5.4 V3" stroke="#6e3a12" stroke-opacity="0.5" stroke-width="0.25"/>
+      <ellipse cx="0" cy="1.6" rx="0.45" ry="0.7" fill="#5b2e0c" fill-opacity="0.55"/>
+      <rect x="-1.7" y="-5.4" width="3.4" height="8.4" rx="0.9" fill="none" stroke="#6e3a12" stroke-opacity="0.5" stroke-width="1" vector-effect="non-scaling-stroke"/>
+      <rect x="-2.2" y="-3.5" width="4.4" height="1.8" rx="0.55" fill="url(#steel)"/>
+      <path d="M-2 -2.9 H2 M-2 -2.3 H2" stroke="#4a515b" stroke-opacity="0.4" stroke-width="0.15"/>
+    </g>
+  </defs>
+
+  <!-- The line: a cotton cord with a faint twist. -->
+  <use href="#line" stroke="#8f7b61" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+  <use href="#line" transform="translate(0 -0.25)" stroke="#f3ece0" stroke-width="0.8" stroke-linecap="round" fill="none"/>
+  <use href="#line" transform="translate(0 -0.15)" stroke="url(#twist)" stroke-width="1.1" fill="none"/>
+
+  <!-- Behind: a screen recording. -->
+  <g filter="url(#drop)">
+    <g transform="translate(23.4 5.3) rotate(6)">
+      <rect x="-8" y="-1" width="16" height="21" rx="1.8" fill="url(#paper)"/>
+      <rect x="-8" y="-1" width="16" height="21" rx="1.8" fill="none" stroke="#1b1430" stroke-opacity="0.45" stroke-width="1" vector-effect="non-scaling-stroke"/>
+      <rect x="-7" y="0" width="14" height="16.8" rx="0.8" fill="url(#reel)"/>
+      <rect x="-7" y="0" width="14" height="16.8" rx="0.8" fill="url(#reelGlow)"/>
+      <circle cx="0" cy="8" r="4.3" fill="#ffffff" fill-opacity="0.96"/>
+      <path d="M-1.3 5.7 L2.5 8 L-1.3 10.3 Z" fill="#ec4d6c" stroke="#ec4d6c" stroke-width="0.6" stroke-linejoin="round"/>
+      <rect x="-5" y="14.3" width="10" height="0.7" rx="0.35" fill="#ffffff" fill-opacity="0.45"/>
+      <rect x="-5" y="14.3" width="4" height="0.7" rx="0.35" fill="#ffffff"/>
+    </g>
+  </g>
+
+  <!-- In front: a screenshot of a window, with the pointer still on it. -->
+  <g filter="url(#drop)">
+    <g transform="translate(11 6.4) rotate(-4)">
+      <rect x="-10.5" y="-1" width="21" height="25.5" rx="2.2" fill="url(#paper)"/>
+      <rect x="-10.5" y="-1" width="21" height="25.5" rx="2.2" fill="none" stroke="#1b1430" stroke-opacity="0.45" stroke-width="1" vector-effect="non-scaling-stroke"/>
+      <rect x="-9.4" y="0.1" width="18.8" height="19.8" rx="1" fill="url(#screen)"/>
+      <rect x="-9.4" y="0.1" width="18.8" height="19.8" rx="1" fill="url(#screenGlow)"/>
+      <rect x="-7.2" y="4.2" width="10" height="8" rx="1" fill="#ffffff" fill-opacity="0.95"/>
+      <path d="M-7.2 5.2 Q-7.2 4.2 -6.2 4.2 H1.8 Q2.8 4.2 2.8 5.2 V6.4 H-7.2 Z" fill="#dfe6ff"/>
+      <rect x="-5.8" y="7.8" width="6" height="1.2" rx="0.6" fill="#c3cdf6"/>
+      <rect x="-5.8" y="9.8" width="3.6" height="1.5" rx="0.75" fill="#ff7a59"/>
+      <path d="M1.6 6.2 V14.8 L3.7 12.9 L5.1 16.1 L6.6 15.4 L5.2 12.3 H8 Z" fill="#ffffff" stroke="#151a3a" stroke-width="0.55" stroke-linejoin="round"/>
+    </g>
+  </g>
+
+  <!-- The pegs, over the line and the prints. -->
+  <use href="#peg" transform="translate(23.4 5.3) rotate(6)"/>
+  <use href="#peg" transform="translate(11 6.4) rotate(-4)"/>
+</svg>

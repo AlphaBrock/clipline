@@ -1,0 +1,156 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>Clipline</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Clipline.ico</ApplicationIcon>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <DefaultLanguage>zh-CN</DefaultLanguage>
+    <!-- A plain .exe by default, with no MSIX package. build/build.ps1
+         passes WindowsPackageType=MSIX for the package. -->
+    <WindowsPackageType Condition="'$(WindowsPackageType)' == ''">None</WindowsPackageType>
+    <!-- The Windows App SDK is not carried along: it is two thirds of the
+         app's size, and Windows keeps one shared copy, the Windows App
+         Runtime, that many apps already installed. Where it is missing,
+         the exe asks to download it on launch (the SDK's bootstrapper does
+         that), the installer installs it, and App Installer fetches it for
+         the MSIX. Its version is MicrosoftWindowsAppSDKFoundationAppXVersion
+         from the package, which build/version.ps1 reads for the installer. -->
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <!-- Brings the resource (PRI) and packaging build tasks along, so the
+         dotnet CLI can build without Visual Studio. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- The heap is tiny: no background collector thread for it. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250401001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.RangeSelector" Version="8.2.250402" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\Clipline.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Clipline.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Clipline-titlebar.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Clipline-about.png" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The settings window reads it to show what changed. -->
+    <EmbeddedResource Include="..\..\CHANGELOG.md" Link="CHANGELOG.md" LogicalName="CHANGELOG.md" />
+  </ItemGroup>
+
+  <!-- Where "release notes" and "report a problem" point. build.ps1 and the
+       workflows fill it in from the git remote. -->
+  <ItemGroup Condition="'$(RepositoryUrl)' != ''">
+    <AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" />
+  </ItemGroup>
+
+  <!-- MARK: Publishing only what the app uses
+
+       The packages carry .NET, so nobody has to install it. Only trimmed
+       down, though: carrying it costs less than leaving it out, because
+       trimming, which also shrinks the 25 MB Windows SDK projection to
+       under 1 MB, only works on an app that brings its own .NET. -->
+
+  <PropertyGroup>
+    <!-- Drops the parts of .NET, the Windows SDK projection and the
+         libraries that no code reaches. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <!-- Trimming leaves no room for runtime-generated WinRT interop: C#
+         classes WinRT sees must be partial, so CsWinRT generates theirs at
+         compile time (warning CsWinRT1028 points out any that are not), and
+         generic collections handed to WinRT need unsafe code for theirs. -->
+    <CsWinRTAotWarningLevel>2</CsWinRTAotWarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Microsoft's Windows SDK projection and WinRT.Runtime each report a
+         summary trim warning about their own internals; the app's own
+         trim warnings still show. -->
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
+    <!-- Features nothing here needs, which trimming can then remove too. -->
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <!-- Translations of library messages: the interface is Chinese. -->
+    <SatelliteResourceLanguages>zh-Hans;zh-Hant;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Native files no code path loads: .NET's debugger and crash dump
+         helpers, its alternative garbage collectors and HTTP/3, and the
+         WebView2 control's runtime. Metadata (.winmd) is only needed to
+         compile against. Should the Windows App SDK ever be carried along
+         again (WindowsAppSDKSelfContained), add its unused parts here:
+         Microsoft.Windows.Widgets, PushNotificationsLongRunningTask.ProxyStub,
+         RestartAgent and the deployment extensions. -->
+    <UnusedFilePattern>(?i)(^|[\\/])(mscordaccore.*|mscordbi|createdump|clrgc|clrgcexp|msquic|Microsoft\.DiaSymReader\.Native\..*|Microsoft\.Web\.WebView2\.Core|WebView2Loader)\.(dll|exe)$|\.winmd$</UnusedFilePattern>
+    <!-- Translated strings in 80-odd languages, should a library bring
+         them; Chinese and English cover this app. -->
+    <UnusedLanguagePattern>(?i)^(?!zh-|en-)[a-z]{2,3}(-[a-z0-9]+)*[\\/].*\.mui$</UnusedLanguagePattern>
+  </PropertyGroup>
+
+  <!-- The exe's publish folder… -->
+  <Target Name="LeaveOutUnusedFiles" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_UnusedPublishFile Include="@(ResolvedFileToPublish)"
+          Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(RelativePath)', '$(UnusedFilePattern)')) or $([System.Text.RegularExpressions.Regex]::IsMatch('%(RelativePath)', '$(UnusedLanguagePattern)'))" />
+      <ResolvedFileToPublish Remove="@(_UnusedPublishFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- …and the MSIX, which gathers its files by a list of its own. -->
+  <Target Name="LeaveOutUnusedPackageFiles" AfterTargets="_ComputeAppxPackagePayload">
+    <ItemGroup>
+      <_UnusedPackageFile Include="@(AppxPackagePayload)"
+          Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(TargetPath)', '$(UnusedFilePattern)')) or $([System.Text.RegularExpressions.Regex]::IsMatch('%(TargetPath)', '$(UnusedLanguagePattern)'))" />
+      <AppxPackagePayload Remove="@(_UnusedPackageFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- MARK: MSIX -->
+
+  <PropertyGroup Condition="'$(WindowsPackageType)' == 'MSIX'">
+    <!-- Kept apart from the plain build, so switching between them never
+         mixes their intermediate files. -->
+    <BaseOutputPath>bin\msix\</BaseOutputPath>
+    <IntermediateOutputPath>obj\msix\$(Configuration)\</IntermediateOutputPath>
+    <!-- Must match the subject of the certificate the package is signed with. -->
+    <MsixPublisher Condition="'$(MsixPublisher)' == ''">CN=Clipline</MsixPublisher>
+    <!-- MSIX versions are four plain numbers. -->
+    <MsixVersion>$(VersionPrefix).0</MsixVersion>
+    <StampedAppxManifest>obj\msix\$(Configuration)\$(RuntimeIdentifier)\Package.appxmanifest</StampedAppxManifest>
+    <AppxPackageSigningEnabled Condition="'$(AppxPackageSigningEnabled)' == ''">false</AppxPackageSigningEnabled>
+    <AppxBundle>Never</AppxBundle>
+    <GenerateTestArtifacts>false</GenerateTestArtifacts>
+    <GenerateTemporaryStoreCertificate>false</GenerateTemporaryStoreCertificate>
+    <!-- No symbols package: it needs Visual Studio's mspdbcmf.exe, and
+         without one the SDK only looks for it to warn that it is missing. -->
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <MsPdbCmfExeFullpath Condition="'$(MsPdbCmfExeFullpath)' == ''">none</MsPdbCmfExeFullpath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(WindowsPackageType)' == 'MSIX'">
+    <Content Include="Assets\Package\*.png" />
+    <!-- Package.appxmanifest is a template: the copy the package is made
+         from carries the version and publisher of this build. -->
+    <AppxManifest Include="$(StampedAppxManifest)" />
+    <None Remove="Package.appxmanifest" />
+  </ItemGroup>
+
+  <Target Name="StampAppxManifest" BeforeTargets="PrepareForBuild" Condition="'$(WindowsPackageType)' == 'MSIX'">
+    <PropertyGroup>
+      <_AppxNamespace>&lt;Namespace Prefix='m' Uri='http://schemas.microsoft.com/appx/manifest/foundation/windows10' /&gt;</_AppxNamespace>
+    </PropertyGroup>
+    <Copy SourceFiles="Package.appxmanifest" DestinationFiles="$(StampedAppxManifest)" />
+    <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Identity/@Version" Value="$(MsixVersion)" Namespaces="$(_AppxNamespace)" />
+    <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Identity/@Publisher" Value="$(MsixPublisher)" Namespaces="$(_AppxNamespace)" />
+  </Target>
+</Project>
