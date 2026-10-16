@@ -84,6 +84,9 @@ public sealed partial class LineWindow : Window
     private string query = "";
     /// Typing into the search box: the window has the keyboard for now.
     private bool typing;
+    /// The window has the keyboard, for typing a search or for Esc to put
+    /// back the note being read.
+    private bool keyboardHeld;
     /// The window that had the keyboard before, to give it back after.
     private IntPtr typedOver;
     private readonly Rope rope = new();
@@ -95,7 +98,7 @@ public sealed partial class LineWindow : Window
     private int otherFirst;
     /// Where the note being read is, while it is.
     private Rect? readerArea;
-    private readonly PolyLineSegment ropeLine = new(), haloLine = new();
+    private readonly PolyLineSegment ropeLine = new(), haloLine = new(), shineLine = new();
     /// The simulation runs, a step every frame.
     private bool running;
     private TimeSpan? lastFrame;
@@ -159,6 +162,7 @@ public sealed partial class LineWindow : Window
         Strip.Translation = new Vector3(0, (float)-StripHeight, 0);
         RopePath.Data = LineGeometry(ropeLine);
         RopeHalo.Data = LineGeometry(haloLine);
+        RopeShine.Data = LineGeometry(shineLine);
         Root.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(OnPointerMoved), handledEventsToo: true);
         Root.PointerExited += (_, _) => lastPointer = null;
 
@@ -171,7 +175,18 @@ public sealed partial class LineWindow : Window
         PrepareSearch();
         // A click on the line anywhere but the note being read puts it back.
         Root.Tapped += (_, _) => Reader.Close();
-        Reader.Closed += () => { readerArea = null; Relayout(); };
+        Reader.Closed += () =>
+        {
+            readerArea = null;
+            Relayout();
+            // Done reading: back to the search it was opened from, if the
+            // keyboard is still the line's; otherwise the keyboard goes back.
+            if (searchOpen && keyboardHeld) StartTyping();
+            else ReleaseKeyboard(giveBack: true);
+            CatchEscape();
+        };
+        // Clicked into again after another app had the keyboard.
+        Reader.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => HoldReader()), handledEventsToo: true);
         TextHistory.Changed += SyncNotes;
 
         poll = DispatcherQueue.CreateTimer();
@@ -196,6 +211,12 @@ public sealed partial class LineWindow : Window
 
         shell = new Shell(hwnd);
         shell.ToggleRequested += Toggle;
+        // Esc puts back the note being read, wherever the focus is.
+        shell.EscapePressed += () =>
+        {
+            if (Reader.IsOpen && !typing) Reader.Close();
+            CatchEscape();
+        };
         shell.OpenFolderRequested += () =>
             Process.Start(new ProcessStartInfo(Settings.Current.EffectiveScreenshotFolder) { UseShellExecute = true });
         shell.SettingsRequested += OpenSettings;
@@ -219,6 +240,9 @@ public sealed partial class LineWindow : Window
         Expire();
         expire.Start();
         Watch(Settings.Current.RecentAtLaunch);
+        // The notes made now, while nothing shows, rather than on first
+        // turning to them.
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => SyncNotes(fresh: null));
         poll.Start();
         // Once the recent captures have been hung.
         trim.Start();
@@ -253,7 +277,12 @@ public sealed partial class LineWindow : Window
                 Watch(recent: 0);
                 break;
             case nameof(Settings.KeepClipboardText):
-                if (!Settings.Current.KeepClipboardText) ShowSide(Side.Photos);
+                if (!Settings.Current.KeepClipboardText)
+                {
+                    ShowSide(Side.Photos);
+                    DismissNotes();
+                }
+                else SyncNotes(fresh: null);
                 Relayout();
                 break;
             case nameof(Settings.MaxTextHistory):
@@ -313,6 +342,7 @@ public sealed partial class LineWindow : Window
         var pointer = Native.CursorPosition();
         // Resting in still air, the line wakes when the next draft arrives.
         if (shown && !running && rope.WindStirring) Wake();
+        if (shown) KeepOnTop(force: false);
 
         if (!shown || hiding)
         {
@@ -391,7 +421,7 @@ public sealed partial class LineWindow : Window
         foreach (var note in notes) note.Refresh();
         if (!shown || on.Handle != monitor.Handle) PlaceOn(on);
         AppWindow.Show(activateWindow: false);
-        Native.BringToTop(hwnd);
+        KeepOnTop(force: true);
 
         shown = true;
         hiding = false;
@@ -405,6 +435,23 @@ public sealed partial class LineWindow : Window
         // rope and photos feel it stop.
         rope.MoveStrip(0, lowering: true);
         Wake();
+    }
+
+    /// Puts the line above every window, other always-on-top ones too.
+    /// Windows sometimes takes always-on-top away from it while the window
+    /// still believes it has it, and the line then comes down behind the
+    /// window in front; so it is checked while shown, and put back.
+    private void KeepOnTop(bool force)
+    {
+        if (!force && Native.IsTopmost(hwnd)) return;
+        // Told again from scratch, which Windows takes when a plain
+        // SetWindowPos alone is ignored.
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.IsAlwaysOnTop = false;
+            presenter.IsAlwaysOnTop = true;
+        }
+        Native.BringToTop(hwnd);
     }
 
     private void TuckAway()
@@ -424,7 +471,6 @@ public sealed partial class LineWindow : Window
         shown = false;
         Reader.Close(now: true);
         CloseSearch();
-        if (side == Side.Photos) DismissNotes();
         rope.PlaceStrip(-StripHeight);
         Strip.Translation = new Vector3(0, (float)-StripHeight, 0);
         AppWindow.Hide();
@@ -675,15 +721,17 @@ public sealed partial class LineWindow : Window
 
     /// Brings the notes in step with the text history: new ones hung, the
     /// one just copied falling in; deleted ones dropping away; the rest in
-    /// the history's order, sliding there if it changed. Only while the
-    /// line shows copied text: otherwise only the count changes.
+    /// the history's order, sliding there if it changed. Kept up on either
+    /// side, weightless and out of sight on the photos' side, so turning to
+    /// the text never has to make fifty notes at once.
     private void SyncNotes(TextClip? fresh)
     {
-        if (side != Side.Notes)
+        if (!Settings.Current.KeepClipboardText)
         {
             ShowSideSwitch();
             return;
         }
+        bool onNotes = side == Side.Notes;
         var history = TextHistory.Items;
         var kept = history.ToHashSet();
         foreach (var gone in notes.Where(n => !kept.Contains(n.Clipping)).ToList()) TakeDown(gone);
@@ -698,12 +746,18 @@ public sealed partial class LineWindow : Window
             notes.Add(note);
         }
         FilterNotes();
-        if (fresh is not null) ScrollToShow(shownNotes.FindIndex(n => n.Clipping == fresh));
+        // The one just copied comes to the front of the notes, wherever the
+        // notes' page was; on the photos' side that page is kept aside.
+        if (fresh is not null)
+        {
+            if (onNotes) ScrollToShow(shownNotes.FindIndex(n => n.Clipping == fresh));
+            else otherFirst = 0;
+        }
         Relayout();
 
         foreach (var note in added)
         {
-            if (note.Clipping == fresh && shown) rope.DropIn(pegs[note]);
+            if (note.Clipping == fresh && shown && onNotes) rope.DropIn(pegs[note]);
             else rope.HangNow(pegs[note]);
         }
         if (!shown) rope.SettleNow();
@@ -754,8 +808,7 @@ public sealed partial class LineWindow : Window
         if (pegs.TryGetValue(note, out var peg)) rope.Release(peg);
     }
 
-    /// Lets go of the notes once the line has turned to the captures and
-    /// they have faded out: they are made again when it turns back.
+    /// Lets go of every note, once copied text is no longer kept.
     private void DismissNotes()
     {
         foreach (var note in notes)
@@ -778,8 +831,31 @@ public sealed partial class LineWindow : Window
         double x = Math.Clamp(peg.TargetX - width / 2, 16, Math.Max(16, Root.ActualWidth - width - 16));
         Canvas.SetLeft(Reader, x);
         Canvas.SetTop(Reader, ReaderTop);
+        Reader.GrowFrom(peg.TargetX - x);
         readerArea = new Rect(x, ReaderTop, size.Width, size.Height);
         Relayout();
+        HoldReader();
+    }
+
+    /// Takes the keyboard so Esc can put the note back, from the search box
+    /// too: the note is in front, so Esc is for it first.
+    private void HoldReader()
+    {
+        typing = false;
+        HoldKeyboard();
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, FocusReader);
+        CatchEscape();
+    }
+
+    /// The note being read takes the focus, for Esc, unless something in it
+    /// already has it: the text pressed to select some of it loses its
+    /// highlight with the focus, and nobody can see what they picked.
+    private void FocusReader()
+    {
+        if (!Reader.IsOpen || typing) return;
+        for (var at = FocusManager.GetFocusedElement(Root.XamlRoot) as DependencyObject; at is not null; at = VisualTreeHelper.GetParent(at))
+            if (at == Reader) return;
+        Reader.Focus(FocusState.Programmatic);
     }
 
     // MARK: Searching the copied text
@@ -793,12 +869,12 @@ public sealed partial class LineWindow : Window
         SearchButton.Tapped += (_, e) =>
         {
             e.Handled = true;
-            if (SearchBox.Visibility == Visibility.Visible) CloseSearch();
+            if (searchOpen) CloseSearch();
             else OpenSearch();
         };
         SearchButton.DoubleTapped += (_, e) => e.Handled = true;
         SearchButton.PointerEntered += (_, _) => SearchGlyph.Opacity = 1;
-        SearchButton.PointerExited += (_, _) => SearchGlyph.Opacity = SearchBox.Visibility == Visibility.Visible ? 1 : 0.85;
+        SearchButton.PointerExited += (_, _) => SearchGlyph.Opacity = searchOpen ? 1 : 0.85;
         SearchBox.TextChanged += (_, _) => Search(SearchBox.Text);
         SearchBox.KeyDown += OnSearchKey;
         // Clicked into again after typing in another app for a while.
@@ -809,15 +885,39 @@ public sealed partial class LineWindow : Window
         // and the line goes back to never taking it.
         Activated += (_, e) =>
         {
-            if (e.WindowActivationState == WindowActivationState.Deactivated) StopTyping(giveBack: false);
+            active = e.WindowActivationState != WindowActivationState.Deactivated;
+            if (active)
+            {
+                // Activating puts the focus back where it last was, which may
+                // be nowhere: the note being read wants it, for Esc.
+                if (Reader.IsOpen && !typing)
+                    DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, FocusReader);
+            }
+            else
+            {
+                typing = false;
+                ReleaseKeyboard(giveBack: false);
+            }
+            CatchEscape();
         };
     }
 
+    private const double SearchWidth = 190;
+    private static readonly TimeSpan SearchGrowTime = TimeSpan.FromMilliseconds(240);
+    private bool searchOpen;
+    private EventHandler<object>? searchGrowing;
+
     private void OpenSearch()
     {
+        double from = SearchBox.Visibility == Visibility.Visible ? SearchBox.Width : 0;
+        searchOpen = true;
         SearchBox.Visibility = Visibility.Visible;
         SearchGlyph.Opacity = 1;
+        // Laid out at its full width first, so the window takes clicks over
+        // all of it from the start; then it grows into it.
+        SearchBox.Width = SearchWidth;
         Relayout();
+        GrowSearch(from, SearchWidth, done: null);
         StartTyping();
     }
 
@@ -825,25 +925,59 @@ public sealed partial class LineWindow : Window
     private void CloseSearch()
     {
         StopTyping(giveBack: true);
-        if (SearchBox.Visibility == Visibility.Collapsed && query.Length == 0) return;
-        SearchBox.Visibility = Visibility.Collapsed;
+        if (!searchOpen && query.Length == 0) return;
+        searchOpen = false;
         SearchGlyph.Opacity = 0.85;
         SearchBox.Text = "";
         Search("");
-        Relayout();
+        GrowSearch(SearchBox.Width, 0, done: () =>
+        {
+            SearchBox.Visibility = Visibility.Collapsed;
+            Relayout();
+        });
+    }
+
+    /// Widens or narrows the box frame by frame, fading it with its width,
+    /// and keeps the switch it sits in centred as it does.
+    private void GrowSearch(double from, double to, Action? done)
+    {
+        if (searchGrowing is not null) CompositionTarget.Rendering -= searchGrowing;
+        if (double.IsNaN(from)) from = 0;
+        var duration = SearchGrowTime * (Math.Abs(to - from) / SearchWidth);
+        var clock = Stopwatch.StartNew();
+        EventHandler<object>? step = null;
+        step = (_, _) =>
+        {
+            double t = duration > TimeSpan.Zero ? Math.Min(1, clock.Elapsed / duration) : 1;
+            double eased = 1 - Math.Pow(1 - t, 3);
+            double width = from + (to - from) * eased;
+            SearchBox.Width = width;
+            SearchBox.Opacity = width / SearchWidth;
+            CenterSideSwitch();
+            if (t < 1) return;
+            CompositionTarget.Rendering -= step;
+            searchGrowing = null;
+            done?.Invoke();
+        };
+        searchGrowing = step;
+        CompositionTarget.Rendering += step;
+    }
+
+    private void CenterSideSwitch()
+    {
+        if (ModeSwitch.Visibility != Visibility.Visible || Root.ActualWidth <= 0) return;
+        ModeSwitch.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(ModeSwitch, Math.Round((Root.ActualWidth - ModeSwitch.DesiredSize.Width) / 2));
     }
 
     /// The overlay never takes the keyboard from the app in front, except to
     /// be typed into: then it does, until the search is done.
     private void StartTyping()
     {
-        if (!typing)
-        {
-            typing = true;
-            var before = Native.GetForegroundWindow();
-            if (before != hwnd) typedOver = before;
-            Native.SetActivatable(hwnd, true);
-        }
+        typing = true;
+        HoldKeyboard();
+        // The search box has Esc of its own.
+        CatchEscape();
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
         {
             if (typing) SearchBox.Focus(FocusState.Programmatic);
@@ -855,6 +989,32 @@ public sealed partial class LineWindow : Window
     {
         if (!typing) return;
         typing = false;
+        // A note still held up to read keeps it, for Esc.
+        if (Reader.IsOpen) HoldReader();
+        else ReleaseKeyboard(giveBack);
+        CatchEscape();
+    }
+
+    /// The window is the active one, and has the keyboard.
+    private bool active;
+
+    /// Esc is the line's while a note is held up to read and the line is the
+    /// active window, unless the search box is being typed into.
+    private void CatchEscape() => shell?.CatchEscape(active && Reader.IsOpen && !typing);
+
+    private void HoldKeyboard()
+    {
+        if (keyboardHeld) return;
+        keyboardHeld = true;
+        var before = Native.GetForegroundWindow();
+        if (before != hwnd) typedOver = before;
+        Native.SetActivatable(hwnd, true);
+    }
+
+    private void ReleaseKeyboard(bool giveBack)
+    {
+        if (!keyboardHeld) return;
+        keyboardHeld = false;
         Native.SetActivatable(hwnd, false);
         if (giveBack && typedOver != IntPtr.Zero && Native.IsWindow(typedOver)) Native.SetForegroundWindow(typedOver);
         typedOver = IntPtr.Zero;
@@ -1074,7 +1234,6 @@ public sealed partial class LineWindow : Window
             lastDrawn.Remove(card);
             Photos.Children.Remove(card);
         }
-        if (side == Side.Photos && notes.Count > 0 && notes.TrueForAll(n => pegs[n].Presence <= 0)) DismissNotes();
         ShowFrame();
 
         if (hiding && rope.StripY <= -StripHeight + 1) FinishTucking();
@@ -1094,6 +1253,7 @@ public sealed partial class LineWindow : Window
             ropeLine.Points = trace;
             // A collection of points can only belong to one line.
             haloLine.Points = Copy(trace);
+            shineLine.Points = Copy(trace);
         }
         foreach (var (card, peg) in pegs)
         {

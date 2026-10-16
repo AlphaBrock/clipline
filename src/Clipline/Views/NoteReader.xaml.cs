@@ -17,7 +17,8 @@ public sealed partial class NoteReader : UserControl
     /// The most of a long text it lays out; copying still copies it all.
     private const int ShownLength = 20_000;
     private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, Microsoft YaHei UI");
-    private static readonly TimeSpan FadeTime = TimeSpan.FromMilliseconds(170);
+    private static readonly TimeSpan OpenTime = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan CloseTime = TimeSpan.FromMilliseconds(150);
 
     public TextClip? Clipping { get; private set; }
     public bool IsOpen { get; private set; }
@@ -28,8 +29,6 @@ public sealed partial class NoteReader : UserControl
     private readonly DispatcherQueueTimer hideTimer;
     private readonly DispatcherQueueTimer copiedTimer;
     private readonly DispatcherQueueTimer noticeTimer;
-    private readonly ScalarTransition fade = new() { Duration = FadeTime };
-    private readonly Vector3Transition grow = new() { Duration = TimeSpan.FromMilliseconds(240) };
 
     public NoteReader()
     {
@@ -40,7 +39,7 @@ public sealed partial class NoteReader : UserControl
         CenterPoint = new Vector3((float)(SheetWidth / 2), 0, 0);
 
         hideTimer = DispatcherQueue.CreateTimer();
-        hideTimer.Interval = FadeTime;
+        hideTimer.Interval = CloseTime;
         hideTimer.IsRepeating = false;
         hideTimer.Tick += (_, _) =>
         {
@@ -69,8 +68,36 @@ public sealed partial class NoteReader : UserControl
         Sheet.Tapped += (_, e) => e.Handled = true;
         Sheet.DoubleTapped += (_, e) => e.Handled = true;
         Sheet.PointerWheelChanged += (_, e) => e.Handled = true;
+        // The wheel scrolls code up and down, as anywhere else; only Shift
+        // or a sideways wheel scrolls it along its lines.
+        CodeText.PointerWheelChanged += OnCodeWheel;
+        Scroller.ViewChanged += (_, e) => { if (!e.IsIntermediate) wheelTarget = null; };
+        // Focused while it is read, so Esc puts it back.
+        IsTabStop = true;
+        UseSystemFocusVisuals = false;
+        KeyDown += (_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Escape) return;
+            e.Handled = true;
+            Close();
+        };
         Full.SelectionChanged += (_, _) => ShowCopyLabel(copied: false);
+        CodeText.SelectionChanged += (_, _) => ShowCopyLabel(copied: false);
         TextHistory.Changed += _ => Follow();
+    }
+
+    private double? wheelTarget;
+
+    private void OnCodeWheel(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(CodeText);
+        bool shift = (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0;
+        if (point.Properties.IsHorizontalMouseWheel || shift) return;
+        e.Handled = true;
+        double from = wheelTarget ?? Scroller.VerticalOffset;
+        double to = Math.Clamp(from - point.Properties.MouseWheelDelta * 0.4, 0, Scroller.ScrollableHeight);
+        wheelTarget = to;
+        Scroller.ChangeView(null, to, null);
     }
 
     // MARK: Opening and closing
@@ -82,6 +109,7 @@ public sealed partial class NoteReader : UserControl
         Clipping = clip;
         Fill();
         Scroller.MaxHeight = Math.Max(80, maxHeight - 48);
+        wheelTarget = null;
         Scroller.ChangeView(null, 0, null, disableAnimation: true);
         ShowCopyLabel(copied: false);
 
@@ -93,27 +121,110 @@ public sealed partial class NoteReader : UserControl
 
         if (Motion.Reduced || wasOpen)
         {
-            OpacityTransition = null;
-            ScaleTransition = null;
-            Opacity = 1;
-            Scale = Vector3.One;
+            Settle();
             return size;
         }
-        // From a little smaller and see-through to where it belongs. Set the
-        // start without transitions, then let them carry it the rest of the way.
-        OpacityTransition = null;
-        ScaleTransition = null;
+        // Hidden until the first frame, so it never shows at full size first.
         Opacity = 0;
-        Scale = new Vector3(0.94f, 0.94f, 1);
-        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
-        {
-            if (!IsOpen) return;
-            OpacityTransition = fade;
-            ScaleTransition = grow;
-            Opacity = 1;
-            Scale = Vector3.One;
-        });
+        // Started once it is placed, and grows from where it is told.
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => { if (IsOpen) AnimateIn(); });
         return size;
+    }
+
+    /// Where on its top edge it grows out of and shrinks back into: over
+    /// the peg of the note it shows.
+    public void GrowFrom(double x) => CenterPoint = new Vector3((float)Math.Clamp(x, 24, SheetWidth - 24), 0, 0);
+
+    // MARK: Motion
+
+    private static readonly Vector3 Shrunk = new(0.9f, 0.9f, 1);
+    private static readonly Vector3 Raised = new(0, -14, 0);
+
+    /// Out of the note, as if lifted off the rope toward you: it grows a
+    /// little past its size and settles back, while it fades in quickly.
+    private void AnimateIn()
+    {
+        var c = CompositionTarget.GetCompositorForCurrentThread();
+        StopAnimations();
+
+        var grow = c.CreateSpringVector3Animation();
+        grow.Target = "Scale";
+        grow.InitialValue = Shrunk;
+        grow.FinalValue = Vector3.One;
+        grow.DampingRatio = 0.72f;
+        grow.Period = TimeSpan.FromMilliseconds(48);
+
+        var drop = c.CreateSpringVector3Animation();
+        drop.Target = "Translation";
+        drop.InitialValue = Raised;
+        drop.FinalValue = Vector3.Zero;
+        drop.DampingRatio = 0.8f;
+        drop.Period = TimeSpan.FromMilliseconds(48);
+
+        var fade = c.CreateScalarKeyFrameAnimation();
+        fade.Target = "Opacity";
+        fade.Duration = OpenTime;
+        fade.InsertKeyFrame(0, 0);
+        fade.InsertKeyFrame(1, 1, c.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1)));
+
+        Opacity = 1;
+        Run(grow);
+        Run(drop);
+        Run(fade);
+    }
+
+    /// Back into the note, quickening as it goes, so it is out of the way
+    /// sooner than it came.
+    private void AnimateOut()
+    {
+        var c = CompositionTarget.GetCompositorForCurrentThread();
+        var accelerate = c.CreateCubicBezierEasingFunction(new Vector2(0.55f, 0), new Vector2(0.85f, 0.4f));
+
+        var shrink = c.CreateVector3KeyFrameAnimation();
+        shrink.Target = "Scale";
+        shrink.Duration = CloseTime;
+        shrink.InsertExpressionKeyFrame(0, "this.StartingValue");
+        shrink.InsertKeyFrame(1, new Vector3(0.94f, 0.94f, 1), accelerate);
+
+        var lift = c.CreateVector3KeyFrameAnimation();
+        lift.Target = "Translation";
+        lift.Duration = CloseTime;
+        lift.InsertExpressionKeyFrame(0, "this.StartingValue");
+        lift.InsertKeyFrame(1, new Vector3(0, -8, 0), accelerate);
+
+        var fade = c.CreateScalarKeyFrameAnimation();
+        fade.Target = "Opacity";
+        fade.Duration = CloseTime;
+        fade.InsertExpressionKeyFrame(0, "this.StartingValue");
+        fade.InsertKeyFrame(1, 0, accelerate);
+
+        StopAnimations();
+        Run(shrink);
+        Run(lift);
+        Run(fade);
+    }
+
+    /// Where it rests when open, with nothing moving it.
+    private void Settle()
+    {
+        StopAnimations();
+        Opacity = 1;
+        Scale = Vector3.One;
+        Translation = Vector3.Zero;
+    }
+
+    private readonly List<Microsoft.UI.Composition.CompositionAnimation> running = new();
+
+    private void Run(Microsoft.UI.Composition.CompositionAnimation animation)
+    {
+        running.Add(animation);
+        StartAnimation(animation);
+    }
+
+    private void StopAnimations()
+    {
+        foreach (var animation in running) StopAnimation(animation);
+        running.Clear();
     }
 
     /// Puts it back, fading unless `now`.
@@ -125,14 +236,12 @@ public sealed partial class NoteReader : UserControl
         if (now || Motion.Reduced)
         {
             hideTimer.Stop();
+            Settle();
             Visibility = Visibility.Collapsed;
             Closed?.Invoke();
             return;
         }
-        OpacityTransition = fade;
-        ScaleTransition = grow;
-        Opacity = 0;
-        Scale = new Vector3(0.97f, 0.97f, 1);
+        AnimateOut();
         hideTimer.Start();
     }
 
@@ -154,11 +263,27 @@ public sealed partial class NoteReader : UserControl
         ShowMeta();
 
         string text = clip.Text.Length > ShownLength ? clip.Text[..ShownLength] : clip.Text;
-        Full.Text = text.Replace("\r\n", "\n").Replace("\t", "    ").TrimEnd();
+        text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\t", "    ").TrimEnd();
         bool code = clip.Kind == ClipKind.Code;
-        Full.FontFamily = code ? Mono : FontFamily;
-        Full.FontSize = code ? 12.5 : 13.5;
-        Full.LineHeight = code ? 19 : 21;
+        // Code turns the whole sheet dark, buttons and all, whatever the theme.
+        RequestedTheme = code ? ElementTheme.Dark : ElementTheme.Default;
+        CodeBackdrop.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
+        CodeArea.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
+        Full.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
+        if (code)
+        {
+            CodeText.FontFamily = LineNumbers.FontFamily = Mono;
+            CodeColours.Write(CodeText, text);
+            int lines = text.Count(c => c == '\n') + 1;
+            LineNumbers.Text = string.Join("\n", Enumerable.Range(1, lines));
+            Full.Text = "";
+        }
+        else
+        {
+            Full.Text = text;
+            CodeText.Inlines.Clear();
+            LineNumbers.Text = "";
+        }
         More.Text = $"还有 {clip.Text.Length - ShownLength:N0} 字没有显示，复制可以得到全文。";
         More.Visibility = clip.Text.Length > ShownLength ? Visibility.Visible : Visibility.Collapsed;
 
@@ -199,8 +324,11 @@ public sealed partial class NoteReader : UserControl
     private void ShowCopyLabel(bool copied)
     {
         CopyGlyph.Glyph = copied ? "" : "";
-        CopyLabel.Text = copied ? "已复制" : Full.SelectedText.Length > 0 ? "复制所选" : "复制";
+        CopyLabel.Text = copied ? "已复制" : Selected.Length > 0 ? "复制所选" : "复制";
     }
+
+    /// Whatever is selected in the text showing.
+    private string Selected => CodeArea.Visibility == Visibility.Visible ? CodeText.SelectedText : Full.SelectedText;
 
     private static string KindName(ClipKind kind) => kind switch
     {
@@ -223,7 +351,7 @@ public sealed partial class NoteReader : UserControl
     private void Copy()
     {
         if (Clipping is not { } clip) return;
-        string selected = Full.SelectedText;
+        string selected = Selected;
         if (!NoteCard.CopyText(selected.Length > 0 ? selected : clip.Text)) return;
         ShowCopyLabel(copied: true);
         copiedTimer.Stop();

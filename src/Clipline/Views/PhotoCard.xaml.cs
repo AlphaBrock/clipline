@@ -62,6 +62,7 @@ public sealed partial class PhotoCard : UserControl, ILineCard
 
     private readonly DispatcherQueueTimer holdTimer;
     private readonly DispatcherQueueTimer badgeTimer;
+    private readonly DispatcherQueueTimer clickTimer;
     private bool held;
     private bool hovered;
 
@@ -82,19 +83,27 @@ public sealed partial class PhotoCard : UserControl, ILineCard
         holdTimer.IsRepeating = false;
         holdTimer.Tick += (_, _) => { held = true; Press(false); Edit(); };
 
+        // A click copies only once it is clear no second click follows to
+        // make it a double click.
+        clickTimer = DispatcherQueue.CreateTimer();
+        clickTimer.Interval = TimeSpan.FromMilliseconds(Native.GetDoubleClickTime());
+        clickTimer.IsRepeating = false;
+        clickTimer.Tick += (_, _) => Copy();
+
         badgeTimer = DispatcherQueue.CreateTimer();
         badgeTimer.Interval = TimeSpan.FromMilliseconds(900);
         badgeTimer.IsRepeating = false;
-        badgeTimer.Tick += (_, _) => CopiedBadge.Opacity = 0;
+        badgeTimer.Tick += (_, _) => CardMotion.Pop(CopiedBadge, false);
+        CardMotion.Prepare(Frame, CopiedBadge);
 
-        PointerEntered += (_, _) => { hovered = true; ShowChips(); };
-        PointerExited += (_, _) => { hovered = false; ShowChips(); CancelHold(); };
+        PointerEntered += (_, _) => { hovered = true; ShowChips(); CardMotion.Lift(Frame, true); };
+        PointerExited += (_, _) => { hovered = false; ShowChips(); CardMotion.Lift(Frame, false); CancelHold(); };
         PointerPressed += OnPointerPressed;
         PointerReleased += (_, _) => CancelHold();
         PointerCanceled += (_, _) => CancelHold();
         PointerCaptureLost += (_, _) => CancelHold();
         Tapped += OnTapped;
-        DoubleTapped += (_, e) => { e.Handled = true; Open(); };
+        DoubleTapped += (_, e) => { e.Handled = true; clickTimer.Stop(); Open(); };
         DragStarting += OnDragStarting;
         DropCompleted += (_, _) =>
         {
@@ -181,7 +190,8 @@ public sealed partial class PhotoCard : UserControl, ILineCard
     {
         // The release that ends a long press is not a click.
         if (held) { held = false; return; }
-        Copy();
+        clickTimer.Stop();
+        clickTimer.Start();
         Poked?.Invoke(e.GetPosition(this));
     }
 
@@ -202,7 +212,8 @@ public sealed partial class PhotoCard : UserControl, ILineCard
     public void Flash(string text)
     {
         BadgeText.Text = text;
-        CopiedBadge.Opacity = 1;
+        CardMotion.ShowGlyph(BadgeGlyph, text);
+        CardMotion.Pop(CopiedBadge, true);
         badgeTimer.Stop();
         badgeTimer.Start();
     }
@@ -211,7 +222,7 @@ public sealed partial class PhotoCard : UserControl, ILineCard
     private void HideBadge()
     {
         badgeTimer.Stop();
-        CopiedBadge.Opacity = 0;
+        CardMotion.Pop(CopiedBadge, false);
     }
 
     private void Open() => Launch(FilePath, verb: null);

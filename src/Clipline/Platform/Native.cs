@@ -116,6 +116,9 @@ public static class Native
     [DllImport("user32.dll")] private static extern int FillRect(IntPtr dc, ref RECT rect, IntPtr brush);
     [DllImport("gdi32.dll")] private static extern IntPtr GetStockObject(int index);
 
+    /// The window is always on top, as Windows has it now.
+    public static bool IsTopmost(IntPtr hwnd) => (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+
     public static void BringToTop(IntPtr hwnd) =>
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
@@ -130,6 +133,8 @@ public static class Native
     }
 
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    /// How long after a click a second one makes it a double click, in ms.
+    [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
 
     /// Limits the window, drawing and clicks alike, to a polygon and a
@@ -497,7 +502,7 @@ public static class Native
     private const int GWL_EXSTYLE = -20;
     private const uint SWP_NOZORDER = 0x4, SWP_FRAMECHANGED = 0x20;
     private const uint WM_NCCALCSIZE = 0x0083;
-    private const long WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000, WS_EX_NOACTIVATE = 0x8000000;
+    private const long WS_EX_TOPMOST = 0x8, WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000, WS_EX_NOACTIVATE = 0x8000000;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWA_BORDER_COLOR = 34;
     private const int DWMWCP_DONOTROUND = 1;
     private const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);

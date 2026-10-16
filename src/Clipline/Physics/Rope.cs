@@ -40,11 +40,11 @@ public sealed class Rope
 
     // The rope loses its bounce to the air along its whole length, and to
     // its own fibres rubbing, which stills the fine ripples first.
-    private const double RopeDrag = 2.4;
+    private const double RopeDrag = 3.4;
     private const double RopeFriction = 2.5e-4;
     // Air drag on a swinging photo, per second: gentle swings linger, wild
     // ones are reined in quickly.
-    private const double SwingDrag = 0.8, SwingDragQuadratic = 0.55;
+    private const double SwingDrag = 1.3, SwingDragQuadratic = 0.7;
     // A peg sliding along the rope: brisk, barely overshooting.
     private const double SlideStiffness = 110, SlideDamping = 18;
     /// Coming into view or leaving it along the rope takes a quarter of a second.
@@ -63,14 +63,14 @@ public sealed class Rope
     private const double DropFade = 0.42;
     /// How hard the pointer grips a photo it brushes past, and the rope:
     /// a light touch, not a hand.
-    private const double BrushGrip = 0.14, PluckGrip = 0.35;
+    private const double BrushGrip = 0.08, PluckGrip = 0.2;
     /// The pointer is no finger: however fast it flicks past, it pushes as
     /// if moving no faster than this, in DIPs a second.
     private const double BrushSpeed = 450;
     /// The fastest the pointer may set a photo swinging, in radians a second.
-    private const double MaxBrushSpin = 2.2;
+    private const double MaxBrushSpin = 1.4;
     /// The fastest a photo may be sent spinning by a push, in radians a second.
-    private const double MaxSpin = 7;
+    private const double MaxSpin = 5;
 
     public enum State
     {
@@ -441,7 +441,7 @@ public sealed class Rope
     {
         if (Motion.Reduced || !peg.OnRope(width)) return;
         var (rx, _) = peg.Turned(local.X - peg.HalfWidth, local.Y - PhotoCard.RopeGrip);
-        const double push = 300;
+        const double push = 200;
         peg.Spin = Math.Clamp(peg.Spin + rx * push * 0.5 / peg.Gyration, -MaxSpin, MaxSpin);
         Kick(peg.X, peg.Weight * photoMass * push * 0.35);
     }
@@ -748,7 +748,7 @@ public static class Wind
     /// How fast gusts travel along the line, in DIPs a second.
     private const double Speed = 480;
     /// The push of a full gust, as an acceleration on a photo.
-    private const double Strength = 60;
+    private const double Strength = 32;
 
     /// The wind's push at `x` at `time`, rightwards.
     public static double At(double x, double time)

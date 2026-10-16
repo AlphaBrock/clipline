@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 
@@ -47,10 +48,13 @@ public sealed partial class NoteCard : UserControl, ILineCard
 
     private readonly DispatcherQueueTimer holdTimer;
     private readonly DispatcherQueueTimer badgeTimer;
+    private readonly DispatcherQueueTimer clickTimer;
     private bool held;
     private bool hovered;
     /// The note cannot show all of the text, so it says how long it is.
     private bool cut;
+    /// A picture of the paper is being taken, or is due.
+    private bool inView, shotDue;
 
     public NoteCard(TextClip clip)
     {
@@ -70,19 +74,27 @@ public sealed partial class NoteCard : UserControl, ILineCard
         holdTimer.IsRepeating = false;
         holdTimer.Tick += (_, _) => { held = true; Press(false); TogglePin(); };
 
+        // A click copies only once it is clear no second click follows to
+        // make it a double click.
+        clickTimer = DispatcherQueue.CreateTimer();
+        clickTimer.Interval = TimeSpan.FromMilliseconds(Native.GetDoubleClickTime());
+        clickTimer.IsRepeating = false;
+        clickTimer.Tick += (_, _) => Copy();
+
         badgeTimer = DispatcherQueue.CreateTimer();
         badgeTimer.Interval = TimeSpan.FromMilliseconds(900);
         badgeTimer.IsRepeating = false;
-        badgeTimer.Tick += (_, _) => Badge.Opacity = 0;
+        badgeTimer.Tick += (_, _) => CardMotion.Pop(Badge, false);
+        CardMotion.Prepare(Frame, Badge);
 
-        PointerEntered += (_, _) => { hovered = true; ShowChips(); };
-        PointerExited += (_, _) => { hovered = false; ShowChips(); CancelHold(); };
+        PointerEntered += (_, _) => { hovered = true; ShowChips(); CardMotion.Lift(Frame, true); };
+        PointerExited += (_, _) => { hovered = false; ShowChips(); CardMotion.Lift(Frame, false); CancelHold(); };
         PointerPressed += OnPointerPressed;
         PointerReleased += (_, _) => CancelHold();
         PointerCanceled += (_, _) => CancelHold();
         PointerCaptureLost += (_, _) => CancelHold();
         Tapped += OnTapped;
-        DoubleTapped += (_, e) => { e.Handled = true; ReadRequested?.Invoke(); };
+        DoubleTapped += (_, e) => { e.Handled = true; clickTimer.Stop(); ReadRequested?.Invoke(); };
         DragStarting += OnDragStarting;
         // Should it ever lay out differently than it first measured.
         SizeChanged += (_, e) =>
@@ -97,6 +109,17 @@ public sealed partial class NoteCard : UserControl, ILineCard
             Body.Opacity = 1;
             DraggingChanged?.Invoke(false);
         };
+
+        // The picture that swings in place of the paper, taken again
+        // whenever the paper would look different.
+        Paper.SizeChanged += (_, _) => Reshoot();
+        ActualThemeChanged += (_, _) => { Colour(); Reshoot(); };
+        Loaded += (_, _) =>
+        {
+            XamlRoot.Changed += OnRootChanged;
+            Reshoot();
+        };
+        Unloaded += (_, _) => { if (XamlRoot is { } root) root.Changed -= OnRootChanged; };
 
         CloseChip.Tapped += (_, e) => { e.Handled = true; LetGo?.Invoke(); };
         CloseChip.DoubleTapped += (_, e) => e.Handled = true;
@@ -157,7 +180,7 @@ public sealed partial class NoteCard : UserControl, ILineCard
                 break;
             case ClipKind.Code:
                 string code = clip.Tidied(PreviewLength);
-                Preview.Text = code;
+                CodeColours.Write(Preview, code);
                 Preview.FontFamily = Mono;
                 Preview.FontSize = 11;
                 Preview.LineHeight = 16;
@@ -173,6 +196,7 @@ public sealed partial class NoteCard : UserControl, ILineCard
         }
 
         KindIcon.Glyph = Glyph(clip.Kind);
+        Colour();
         Meta.Text = clip.Describe(withLength: cut);
         PinMark.Visibility = clip.Pinned ? Visibility.Visible : Visibility.Collapsed;
         ShowChips();
@@ -182,9 +206,97 @@ public sealed partial class NoteCard : UserControl, ILineCard
     /// whether it is pinned.
     public void Refresh()
     {
-        Meta.Text = Clipping.Describe(withLength: cut);
-        PinMark.Visibility = Clipping.Pinned ? Visibility.Visible : Visibility.Collapsed;
+        string meta = Clipping.Describe(withLength: cut);
+        var pin = Clipping.Pinned ? Visibility.Visible : Visibility.Collapsed;
         ShowChips();
+        // Pictured again only if it says something new: fifty notes all
+        // pictured at once are a stall to see.
+        if (meta == Meta.Text && pin == PinMark.Visibility) return;
+        Meta.Text = meta;
+        PinMark.Visibility = pin;
+        Reshoot();
+    }
+
+    // MARK: The picture of the paper
+
+    private double shotScale;
+
+    private void OnRootChanged(XamlRoot root, XamlRootChangedEventArgs e)
+    {
+        if (root.RasterizationScale != shotScale) Reshoot();
+    }
+
+    /// Takes the picture of the paper again, once whatever changed it has
+    /// been laid out, and once the note is in view: out of sight, the
+    /// picture can wait.
+    private void Reshoot()
+    {
+        shotDue = true;
+        if (inView) Shots.Add(this);
+    }
+
+    /// The notes waiting to be pictured, taken one at a time, each when the
+    /// line has nothing more pressing, so a page of them coming into view
+    /// never holds up a frame.
+    private static class Shots
+    {
+        private static readonly Queue<NoteCard> waiting = new();
+        private static bool taking;
+
+        public static void Add(NoteCard note)
+        {
+            if (!waiting.Contains(note)) waiting.Enqueue(note);
+            if (taking) return;
+            taking = true;
+            note.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, TakeNext);
+        }
+
+        private static async void TakeNext()
+        {
+            try
+            {
+                while (waiting.TryDequeue(out var note))
+                {
+                    if (!note.inView || !note.shotDue) continue;
+                    note.shotDue = false;
+                    await note.ShootAsync();
+                    // Back to the queue between pictures, so frames go first.
+                    var yielded = new TaskCompletionSource();
+                    note.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => yielded.SetResult());
+                    await yielded.Task;
+                }
+            }
+            finally
+            {
+                taking = false;
+            }
+        }
+    }
+
+    private async Task ShootAsync()
+    {
+        if (XamlRoot is null || Paper.ActualWidth == 0 || Paper.ActualHeight == 0) return;
+        // The paper itself must show to be pictured. The old picture stays
+        // over it meanwhile, so nothing is seen to change.
+        Paper.Opacity = 1;
+        try
+        {
+            var shot = new RenderTargetBitmap();
+            await shot.RenderAsync(Paper);
+            if (shot.PixelWidth == 0) return;
+            shotScale = XamlRoot?.RasterizationScale ?? 0;
+            PaperShot.Source = shot;
+            PaperShot.Width = Paper.ActualWidth;
+            PaperShot.Height = Paper.ActualHeight;
+            PaperShot.Visibility = Visibility.Visible;
+            Paper.Opacity = 0;
+        }
+        catch (Exception e) when (e is ArgumentException or System.Runtime.InteropServices.COMException)
+        {
+            // Without a picture the paper shows as it is, only less steady.
+            Log.Write("Could not picture the note", e);
+            PaperShot.Visibility = Visibility.Collapsed;
+        }
     }
 
     /// Lays the note out, now that it is in the tree, and notes its height.
@@ -199,6 +311,36 @@ public sealed partial class NoteCard : UserControl, ILineCard
     /// An address or a path with somewhere to wrap after each slash, so it
     /// breaks between its parts rather than in the middle of one.
     private static string Breakable(string text) => text.Replace("/", "/\u200B").Replace("\\", "\\\u200B");
+
+    /// Each kind of text in its own colour: code on a dark sheet like an
+    /// editor's, and the kind's mark tinted to match. Set from code, it is
+    /// set again whenever the theme changes.
+    private void Colour()
+    {
+        string? accent = Clipping.Kind switch
+        {
+            ClipKind.Link => "LinkAccentBrush",
+            ClipKind.Email => "MailAccentBrush",
+            ClipKind.Path => "PathAccentBrush",
+            ClipKind.Code => "CodeAccentBrush",
+            _ => null,
+        };
+        if (accent is not null) KindIcon.Foreground = ThemeBrush(accent);
+        if (Clipping.Kind is ClipKind.Link or ClipKind.Email) Heading.Foreground = ThemeBrush(accent!);
+        if (Clipping.Kind == ClipKind.Code)
+        {
+            Paper.Background = ThemeBrush("CodePaperBrush");
+            Meta.Foreground = ThemeBrush("CodeMutedBrush");
+            PinMark.Foreground = ThemeBrush("CodeAccentBrush");
+        }
+    }
+
+    private Brush ThemeBrush(string key)
+    {
+        var themes = Application.Current.Resources.ThemeDictionaries;
+        var theme = (ResourceDictionary)themes[ActualTheme == ElementTheme.Dark ? "Dark" : "Light"];
+        return (Brush)theme[key];
+    }
 
     public static string Glyph(ClipKind kind) => kind switch
     {
@@ -238,7 +380,8 @@ public sealed partial class NoteCard : UserControl, ILineCard
     {
         // The release that ends a long press is not a click.
         if (held) { held = false; return; }
-        Copy();
+        clickTimer.Stop();
+        clickTimer.Start();
         Poked?.Invoke(e.GetPosition(this));
     }
 
@@ -282,7 +425,8 @@ public sealed partial class NoteCard : UserControl, ILineCard
     public void Flash(string text)
     {
         BadgeText.Text = text;
-        Badge.Opacity = 1;
+        CardMotion.ShowGlyph(BadgeGlyph, text);
+        CardMotion.Pop(Badge, true);
         badgeTimer.Stop();
         badgeTimer.Start();
     }
@@ -294,12 +438,18 @@ public sealed partial class NoteCard : UserControl, ILineCard
         e.AllowedOperations = DataPackageOperation.Copy;
         DraggingChanged?.Invoke(true);
         badgeTimer.Stop();
-        Badge.Opacity = 0;
+        CardMotion.Pop(Badge, false);
         await DragPicture.ShowAsync(e, Frame, CloseChip, PinChip, Badge);
         Body.Opacity = 0.45;
     }
 
-    public void SetInView(bool visible) => IsHitTestVisible = visible;
+    public void SetInView(bool visible)
+    {
+        IsHitTestVisible = visible;
+        if (visible == inView) return;
+        inView = visible;
+        if (visible && shotDue) Shots.Add(this);
+    }
 
     private void Press(bool down) => Pressed?.Invoke(down);
 }

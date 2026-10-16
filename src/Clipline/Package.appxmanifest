@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The MSIX manifest. The build copies it and fills in Identity's Version
-     (from Directory.Build.props) and Publisher (MsixPublisher, which must
-     match the signing certificate), so the values here are placeholders. -->
+<!-- The Microsoft Store package's manifest. The build copies it and fills in
+     Identity's Version (from Directory.Build.props), Name and Publisher, and
+     PublisherDisplayName (MsixIdentityName, MsixPublisher and
+     MsixPublisherDisplayName, from Partner Center), so the values here are
+     placeholders. -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"

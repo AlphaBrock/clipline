@@ -1,3 +1,4 @@
+using System.Numerics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
@@ -59,5 +60,57 @@ internal static class DragPicture
         {
             for (int i = 0; i < leaveOut.Length; i++) leaveOut[i].Visibility = shown[i];
         }
+    }
+}
+
+/// The small motions both kinds of card make on their own, apart from how
+/// the rope swings them.
+internal static class CardMotion
+{
+    private const float Rest = 24, Lifted = 44;
+    private const float LiftScale = 1.035f;
+    private const float BadgeHidden = 0.82f;
+
+    /// Readies the frame to rise toward the pointer, and the badge to pop.
+    public static void Prepare(FrameworkElement frame, FrameworkElement badge)
+    {
+        frame.ScaleTransition = new Vector3Transition { Duration = TimeSpan.FromMilliseconds(180) };
+        frame.TranslationTransition = new Vector3Transition { Duration = TimeSpan.FromMilliseconds(180) };
+        // It grows from the top, where it hangs, so the peg keeps its hold.
+        frame.SizeChanged += (_, e) => frame.CenterPoint = new Vector3((float)(e.NewSize.Width / 2), 0, 0);
+
+        badge.ScaleTransition = new Vector3Transition { Duration = TimeSpan.FromMilliseconds(220) };
+        badge.Scale = new Vector3(BadgeHidden, BadgeHidden, 1);
+        badge.SizeChanged += (_, e) => badge.CenterPoint = new Vector3((float)(e.NewSize.Width / 2), (float)(e.NewSize.Height / 2), 0);
+    }
+
+    /// Hovered, the card comes a little toward you, its shadow deepening.
+    public static void Lift(FrameworkElement frame, bool up)
+    {
+        float scale = up && !Motion.Reduced ? LiftScale : 1;
+        frame.Scale = new Vector3(scale, scale, 1);
+        frame.Translation = new Vector3(0, 0, up ? Lifted : Rest);
+    }
+
+    /// A tick for a copy, a pin for pinning; nothing for a warning.
+    public static void ShowGlyph(Microsoft.UI.Xaml.Controls.FontIcon icon, string text)
+    {
+        string? glyph = text switch
+        {
+            "已复制" => "",
+            "已置顶" => "",
+            "已取消置顶" => "",
+            _ => null,
+        };
+        icon.Visibility = glyph is null ? Visibility.Collapsed : Visibility.Visible;
+        if (glyph is not null) icon.Glyph = glyph;
+    }
+
+    /// Shows or hides a badge over the card, popping it in and out.
+    public static void Pop(UIElement badge, bool show)
+    {
+        float scale = show || Motion.Reduced ? 1 : BadgeHidden;
+        badge.Scale = new Vector3(scale, scale, 1);
+        badge.Opacity = show ? 1 : 0;
     }
 }

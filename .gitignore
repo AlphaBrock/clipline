@@ -1,8 +1,8 @@
 bin/
 obj/
 artifacts/
+store/
 .vs/
 *.user
-# Signing keys stay out of the repository; CI gets them from secrets.
 *.pfx
-build/certs/
+.idea/

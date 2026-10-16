@@ -118,15 +118,51 @@ var
   DownloadPage: TDownloadWizardPage;
   RuntimeNeeded, RuntimeTried, RuntimeDownloaded: Boolean;
 
-// The runtime is a framework package, registered per user, so
-// Get-AppxPackage lists it when this user has it.
+// Whether dotted version V ("7000.785.2325.0") is at least Min.
+function VersionAtLeast(V, Min: String): Boolean;
+var
+  I, A, B, Dot: Integer;
+begin
+  for I := 1 to 4 do begin
+    Dot := Pos('.', V + '.');
+    A := StrToIntDef(Copy(V, 1, Dot - 1), 0);
+    Delete(V, 1, Dot);
+    Dot := Pos('.', Min + '.');
+    B := StrToIntDef(Copy(Min, 1, Dot - 1), 0);
+    Delete(Min, 1, Dot);
+    if A <> B then begin
+      Result := A > B;
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+// The runtime is a framework package, registered per user, and each one
+// this user has is a key named after its full name,
+// "<name>_<version>_<arch>__<publisher id>", under the AppModel repository.
+// Read there rather than with Get-AppxPackage: setup starting a hidden
+// PowerShell is what antivirus behaviour detection holds against it.
 function RuntimeInstalled: Boolean;
 var
-  ResultCode: Integer;
+  Names: TArrayOfString;
+  I: Integer;
+  Name, Prefix: String;
 begin
-  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NoProfile -NonInteractive -Command "if (Get-AppxPackage -Name ''{#RuntimeName}'' | Where-Object { $_.Architecture -eq ''{#Arch}'' -and [version]$_.Version -ge [version]''{#RuntimeMinVersion}'' }) { exit 0 } else { exit 1 }"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  Result := False;
+  if not RegGetSubkeyNames(HKCU, 'Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages', Names) then
+    Exit;
+  Prefix := Lowercase('{#RuntimeName}_');
+  for I := 0 to GetArrayLength(Names) - 1 do begin
+    Name := Lowercase(Names[I]);
+    if (Pos(Prefix, Name) = 1) and (Pos(Lowercase('_{#Arch}_'), Name) > 0) then begin
+      Delete(Name, 1, Length(Prefix));
+      if VersionAtLeast(Copy(Name, 1, Pos('_', Name) - 1), '{#RuntimeMinVersion}') then begin
+        Result := True;
+        Exit;
+      end;
+    end;
+  end;
 end;
 
 function InitializeSetup: Boolean;
@@ -187,7 +223,9 @@ begin
   if not RuntimeDownloaded then
     Exit;
   WizardForm.StatusLabel.Caption := CustomMessage('RuntimeInstalling');
-  if not Exec(ExpandConstant('{tmp}\' + RuntimeFile), '--quiet', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+  // In plain sight, with its own progress: a downloaded program run hidden
+  // is what antivirus behaviour detection takes setup for a dropper by.
+  if not Exec(ExpandConstant('{tmp}\' + RuntimeFile), '', '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode)
      or (ResultCode <> 0) then
     SuppressibleMsgBox(FmtMessage(CustomMessage('RuntimeFailed'), [IntToStr(ResultCode)]), mbError, MB_OK, IDOK);
 end;

@@ -8,12 +8,16 @@ namespace Clipline;
 public sealed partial class Shell : IDisposable
 {
     private const int HotKeyId = 1;
+    private const int EscapeId = 2;
+    private const uint VK_ESCAPE = 0x1B;
     private const uint TrayMessage = WM_APP + 1;
     /// Sent by a second copy of Clipline to the one already running.
     private const uint OpenSettingsMessage = WM_APP + 2;
     private const int MenuToggle = 1, MenuOpenFolder = 2, MenuSettings = 3, MenuQuit = 4;
 
     public event Action? ToggleRequested;
+    /// Esc, while it is caught.
+    public event Action? EscapePressed;
     public event Action? OpenFolderRequested;
     public event Action? SettingsRequested;
     public event Action? QuitRequested;
@@ -60,6 +64,18 @@ public sealed partial class Shell : IDisposable
         UpdateTip();
         return HasHotKey;
     }
+
+    /// Takes Esc for the line, or lets it go. Only ever while the line is
+    /// the active window, so no other app loses it: then it arrives however
+    /// the keyboard focus inside the window happens to be.
+    public void CatchEscape(bool on)
+    {
+        if (on == catchingEscape) return;
+        catchingEscape = on;
+        if (on) catchingEscape = RegisterHotKey(hwnd, EscapeId, MOD_NOREPEAT, VK_ESCAPE);
+        else UnregisterHotKey(hwnd, EscapeId);
+    }
+    private bool catchingEscape;
 
     /// Lets go of the shortcut for a moment, while a new one is being chosen.
     public void SuspendHotKey()
@@ -138,6 +154,11 @@ public sealed partial class Shell : IDisposable
         if (msg == WM_HOTKEY && wParam.ToInt32() == HotKeyId)
         {
             ToggleRequested?.Invoke();
+            return IntPtr.Zero;
+        }
+        if (msg == WM_HOTKEY && wParam.ToInt32() == EscapeId)
+        {
+            EscapePressed?.Invoke();
             return IntPtr.Zero;
         }
         if (msg == TrayMessage)

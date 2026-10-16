@@ -13,7 +13,10 @@
                  top edge and a soft shadow. -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="GlassBrush" Color="#C4FFFFFF" />
+                    <LinearGradientBrush x:Key="GlassBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#DEFFFFFF" Offset="0" />
+                        <GradientStop Color="#C2FFFFFF" Offset="1" />
+                    </LinearGradientBrush>
                     <LinearGradientBrush x:Key="GlassEdgeBrush" StartPoint="0,0" EndPoint="0,1">
                         <GradientStop Color="#FFFFFFFF" Offset="0" />
                         <GradientStop Color="#33FFFFFF" Offset="1" />
@@ -30,9 +33,31 @@
                         <GradientStop Color="#80FFFFFF" Offset="0.88" />
                         <GradientStop Color="#00FFFFFF" Offset="1" />
                     </LinearGradientBrush>
-                    <SolidColorBrush x:Key="PegBrush" Color="#FFDDB991" />
-                    <SolidColorBrush x:Key="PegEdgeBrush" Color="#40000000" />
-                    <SolidColorBrush x:Key="PegSpringBrush" Color="#80705030" />
+                    <!-- A clothespin of pale beech with a steel spring. -->
+                    <LinearGradientBrush x:Key="PegWoodBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#FFB98A5A" Offset="0" />
+                        <GradientStop Color="#FFDDB68A" Offset="0.35" />
+                        <GradientStop Color="#FFF0D3AC" Offset="0.5" />
+                        <GradientStop Color="#FFDDB68A" Offset="0.68" />
+                        <GradientStop Color="#FFB98A5A" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PegEdgeBrush" Color="#59603A18" />
+                    <SolidColorBrush x:Key="PegGrainBrush" Color="#2E6B4422" />
+                    <SolidColorBrush x:Key="PegGlossBrush" Color="#38FFFFFF" />
+                    <SolidColorBrush x:Key="PegSplitBrush" Color="#8C5A3A1C" />
+                    <LinearGradientBrush x:Key="PegSpringBrush" StartPoint="0.5,0" EndPoint="0.5,1">
+                        <GradientStop Color="#FFF4F5F7" Offset="0" />
+                        <GradientStop Color="#FFB4B8BF" Offset="0.45" />
+                        <GradientStop Color="#FF6D727A" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PegSpringEdgeBrush" Color="#80474B52" />
+                    <SolidColorBrush x:Key="PegSpringShineBrush" Color="#E6FFFFFF" />
+                    <LinearGradientBrush x:Key="RopeShineBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#00FFFFFF" Offset="0" />
+                        <GradientStop Color="#59FFFFFF" Offset="0.12" />
+                        <GradientStop Color="#59FFFFFF" Offset="0.88" />
+                        <GradientStop Color="#00FFFFFF" Offset="1" />
+                    </LinearGradientBrush>
                     <SolidColorBrush x:Key="HintBrush" Color="#E6202020" />
                     <SolidColorBrush x:Key="BadgeBrush" Color="#D9202020" />
                     <SolidColorBrush x:Key="BadgeForeground" Color="#FFFFFFFF" />
@@ -42,6 +67,15 @@
                     <SolidColorBrush x:Key="NoteMutedBrush" Color="#A3554C42" />
                     <SolidColorBrush x:Key="NoteRuleBrush" Color="#17000000" />
                     <SolidColorBrush x:Key="PinBrush" Color="#FFBF7430" />
+                    <!-- What kind of text a note holds, by colour. -->
+                    <SolidColorBrush x:Key="LinkAccentBrush" Color="#FF2F6FD6" />
+                    <SolidColorBrush x:Key="MailAccentBrush" Color="#FF0F8F7E" />
+                    <SolidColorBrush x:Key="PathAccentBrush" Color="#FFB7791F" />
+                    <SolidColorBrush x:Key="CodeAccentBrush" Color="#FF8B6CF0" />
+                    <!-- Code is written on a sheet like an editor's, dark in either theme. -->
+                    <SolidColorBrush x:Key="CodePaperBrush" Color="#FF1E2027" />
+                    <SolidColorBrush x:Key="CodeTextBrush" Color="#FFE3E5EA" />
+                    <SolidColorBrush x:Key="CodeMutedBrush" Color="#8CE3E5EA" />
                     <SolidColorBrush x:Key="SheetBrush" Color="#F7FDFCF9" />
                     <SolidColorBrush x:Key="ChipHoverBrush" Color="#14000000" />
                     <!-- The switch between photos and text. -->
@@ -49,7 +83,10 @@
                     <SolidColorBrush x:Key="ThumbEdgeBrush" Color="#1F000000" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="GlassBrush" Color="#B32C2C30" />
+                    <LinearGradientBrush x:Key="GlassBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#C7363639" Offset="0" />
+                        <GradientStop Color="#B3242427" Offset="1" />
+                    </LinearGradientBrush>
                     <LinearGradientBrush x:Key="GlassEdgeBrush" StartPoint="0,0" EndPoint="0,1">
                         <GradientStop Color="#59FFFFFF" Offset="0" />
                         <GradientStop Color="#0FFFFFFF" Offset="1" />
@@ -66,9 +103,30 @@
                         <GradientStop Color="#66000000" Offset="0.88" />
                         <GradientStop Color="#00000000" Offset="1" />
                     </LinearGradientBrush>
-                    <SolidColorBrush x:Key="PegBrush" Color="#FFB89470" />
-                    <SolidColorBrush x:Key="PegEdgeBrush" Color="#66000000" />
-                    <SolidColorBrush x:Key="PegSpringBrush" Color="#99403020" />
+                    <LinearGradientBrush x:Key="PegWoodBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#FF8A6440" Offset="0" />
+                        <GradientStop Color="#FFB48B62" Offset="0.35" />
+                        <GradientStop Color="#FFC9A27A" Offset="0.5" />
+                        <GradientStop Color="#FFB48B62" Offset="0.68" />
+                        <GradientStop Color="#FF8A6440" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PegEdgeBrush" Color="#80000000" />
+                    <SolidColorBrush x:Key="PegGrainBrush" Color="#38402510" />
+                    <SolidColorBrush x:Key="PegGlossBrush" Color="#24FFFFFF" />
+                    <SolidColorBrush x:Key="PegSplitBrush" Color="#B33A2410" />
+                    <LinearGradientBrush x:Key="PegSpringBrush" StartPoint="0.5,0" EndPoint="0.5,1">
+                        <GradientStop Color="#FFD9DCE1" Offset="0" />
+                        <GradientStop Color="#FF9A9FA7" Offset="0.45" />
+                        <GradientStop Color="#FF51555C" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PegSpringEdgeBrush" Color="#99000000" />
+                    <SolidColorBrush x:Key="PegSpringShineBrush" Color="#B3FFFFFF" />
+                    <LinearGradientBrush x:Key="RopeShineBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#00FFFFFF" Offset="0" />
+                        <GradientStop Color="#40FFFFFF" Offset="0.12" />
+                        <GradientStop Color="#40FFFFFF" Offset="0.88" />
+                        <GradientStop Color="#00FFFFFF" Offset="1" />
+                    </LinearGradientBrush>
                     <SolidColorBrush x:Key="HintBrush" Color="#F2FFFFFF" />
                     <SolidColorBrush x:Key="BadgeBrush" Color="#E6F2F2F2" />
                     <SolidColorBrush x:Key="BadgeForeground" Color="#FF1A1A1A" />
@@ -77,6 +135,13 @@
                     <SolidColorBrush x:Key="NoteMutedBrush" Color="#94F5F2EC" />
                     <SolidColorBrush x:Key="NoteRuleBrush" Color="#1CFFFFFF" />
                     <SolidColorBrush x:Key="PinBrush" Color="#FFEBB06C" />
+                    <SolidColorBrush x:Key="LinkAccentBrush" Color="#FF7AAEFF" />
+                    <SolidColorBrush x:Key="MailAccentBrush" Color="#FF4FD1BC" />
+                    <SolidColorBrush x:Key="PathAccentBrush" Color="#FFE8B04F" />
+                    <SolidColorBrush x:Key="CodeAccentBrush" Color="#FFB3A0FF" />
+                    <SolidColorBrush x:Key="CodePaperBrush" Color="#FF1E2027" />
+                    <SolidColorBrush x:Key="CodeTextBrush" Color="#FFE3E5EA" />
+                    <SolidColorBrush x:Key="CodeMutedBrush" Color="#80E3E5EA" />
                     <SolidColorBrush x:Key="SheetBrush" Color="#F7242428" />
                     <SolidColorBrush x:Key="ChipHoverBrush" Color="#1FFFFFFF" />
                     <SolidColorBrush x:Key="ThumbBrush" Color="#38FFFFFF" />

@@ -41,6 +41,13 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
+                <!-- Code is read on the same dark sheet it hangs on. -->
+                <Border
+                    x:Name="CodeBackdrop"
+                    Grid.RowSpan="2"
+                    Background="{ThemeResource CodePaperBrush}"
+                    CornerRadius="13"
+                    Visibility="Collapsed" />
 
                 <Grid Padding="14,8,8,8" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
@@ -139,6 +146,37 @@
                             IsTextSelectionEnabled="True"
                             LineHeight="21"
                             TextWrapping="Wrap" />
+                        <!-- Code as in an editor: numbered lines, never wrapped,
+                             scrolled sideways when they run long. -->
+                        <Grid x:Name="CodeArea" ColumnSpacing="14" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                x:Name="LineNumbers"
+                                FontSize="12.5"
+                                Foreground="#5C6370"
+                                IsTextSelectionEnabled="False"
+                                LineHeight="19"
+                                LineStackingStrategy="BlockLineHeight"
+                                TextAlignment="Right" />
+                            <ScrollViewer
+                                Grid.Column="1"
+                                HorizontalScrollBarVisibility="Auto"
+                                HorizontalScrollMode="Auto"
+                                VerticalScrollBarVisibility="Disabled"
+                                VerticalScrollMode="Disabled">
+                                <TextBlock
+                                    x:Name="CodeText"
+                                    Padding="0,0,0,10"
+                                    FontSize="12.5"
+                                    IsTextSelectionEnabled="True"
+                                    LineHeight="19"
+                                    LineStackingStrategy="BlockLineHeight"
+                                    TextWrapping="NoWrap" />
+                            </ScrollViewer>
+                        </Grid>
                         <TextBlock
                             x:Name="More"
                             FontSize="12"

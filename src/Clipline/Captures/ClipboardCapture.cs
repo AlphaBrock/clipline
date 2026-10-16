@@ -20,6 +20,11 @@ namespace Clipline;
 /// | WeCom  | copies from its snipping window, of class SnapshotWnd.       |
 /// | QQ     | leaves no owner, just after a full-screen QQ window was in   |
 /// |        | front: the one you pick the area in.                         |
+///
+/// Packaged screenshot tools, such as the Win+Shift+S overlay, go through
+/// the clipboard broker, a window of class CLIPBRDWNDCLASS in svchost, so
+/// the broker is the owner. Theirs are the images the broker puts there
+/// while, or just after, the tool is in front.
 public sealed class ClipboardCapture
 {
     /// Process names, without ".exe", of the tools whose clipboard images
@@ -61,6 +66,11 @@ public sealed class ClipboardCapture
     /// The last chat app seen picking an area to capture, and when.
     private string? snipApp;
     private DateTime snipSeen;
+    /// The screenshot tool whose window is in front, if one is.
+    private string? frontTool;
+    /// The last screenshot tool seen in front, and when.
+    private string? toolApp;
+    private DateTime toolSeen;
 
     /// Called often, on the UI thread: notes a chat app's screenshot window
     /// while it is in front. Only looks the window up when it changes.
@@ -72,6 +82,12 @@ public sealed class ClipboardCapture
             lastForeground = window;
             var (process, coversScreen) = Native.WindowOwner(window);
             snipping = coversScreen && process is not null && ChatApps.Contains(process) ? process : null;
+            frontTool = process is not null && ScreenshotTools.Contains(process) ? process : null;
+        }
+        if (frontTool is not null)
+        {
+            toolApp = frontTool;
+            toolSeen = DateTime.UtcNow;
         }
         if (snipping is null) return;
         snipApp = snipping;
@@ -83,6 +99,11 @@ public sealed class ClipboardCapture
     private string? ScreenshotSource(string? owner)
     {
         if (owner is not null && ScreenshotTools.Contains(owner)) return owner;
+        if (owner is "svchost" && Native.ClipboardOwnerClass() == "CLIPBRDWNDCLASS")
+        {
+            NoticeForeground();
+            if (toolApp is { } tool && DateTime.UtcNow - toolSeen < SnipGrace) return tool;
+        }
         if (Native.ClipboardHasFormat("WeChatScreenshotFormat")) return "WeChat";
         if (owner is "WXWork" && Native.ClipboardOwnerClass() == "SnapshotWnd") return "WeCom";
         if (snipApp is { } app && DateTime.UtcNow - snipSeen < SnipGrace

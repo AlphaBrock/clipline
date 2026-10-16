@@ -58,9 +58,10 @@ function Get-ReleaseNotes {
 # What a GitHub release says: the changelog section, then which file to
 # download. Fails if the changelog has nothing for this version.
 function New-ReleaseNotes {
-    param([Parameter(Mandatory)] [string] $Version, [switch] $SelfSigned)
+    param([Parameter(Mandatory)] [string] $Version)
     $notes = Get-ReleaseNotes -Version $Version
     if (-not $notes) { throw "CHANGELOG.md has no section for $Version. Add '## [$Version] - $(Get-Date -Format yyyy-MM-dd)' with its changes." }
+    $runtime = Get-WindowsAppRuntime
     $download = @(
         ''
         '---'
@@ -69,28 +70,12 @@ function New-ReleaseNotes {
         ''
         '| 文件 | 说明 |'
         '|:--|:--|'
-        "| ``Clipline-$Version-x64-setup.exe`` | **安装版**，推荐。默认只为当前用户安装，不需要管理员权限 |"
-        "| ``Clipline-$Version-x64-portable.zip`` | **便携版**。解压即用，设置保存在同目录的 ``data`` 文件夹 |"
-        "| ``Clipline-$Version-x64.msix`` | **MSIX 包**。由 Windows 管理安装和卸载 |"
+        "| ``Clipline-$Version-x64-setup.exe`` | **安装版**，推荐。默认只为当前用户安装，不需要管理员权限；缺少 Windows App Runtime $($runtime.Channel) 时会自动下载安装 |"
+        "| ``Clipline-$Version-x64-portable.zip`` | **免安装版**。自带 Windows App Runtime，解压即用，什么都不用装；设置保存在同目录的 ``data`` 文件夹 |"
         ''
-        'ARM64 设备（如骁龙笔记本）请选文件名带 `arm64` 的那一个。'
-    )
-    $runtime = Get-WindowsAppRuntime
-    $download += @(
+        'ARM64 设备（如骁龙笔记本）请选文件名带 `arm64` 的那一个。也可以从 Microsoft Store 安装，由商店负责更新。'
         ''
-        "需要 **Windows App Runtime $($runtime.Channel)**，很多电脑已经装过。安装版会自动下载安装；便携版第一次启动时如果缺少，会弹出 Windows 的提示带你去下载；"
-        "也可以手动安装：[x64]($($runtime.DownloadUrl -f 'x64')) · [ARM64]($($runtime.DownloadUrl -f 'arm64'))。"
+        '`SHA256SUMS.txt` 里是每个文件的 SHA-256 校验值。'
     )
-    if ($SelfSigned) {
-        $download += @(
-            ''
-            'MSIX 用自签名证书签名。第一次安装前，用管理员身份打开 PowerShell 信任附带的 `Clipline.cer`：'
-            ''
-            '```powershell'
-            'Import-Certificate -FilePath .\Clipline.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople'
-            '```'
-        )
-    }
-    $download += @('', '`SHA256SUMS.txt` 里是每个文件的 SHA-256 校验值。')
     $notes + "`n" + ($download -join "`n")
 }

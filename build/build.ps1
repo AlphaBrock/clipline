@@ -4,9 +4,14 @@
 
 .DESCRIPTION
     Targets:
-      installer  Clipline-<version>-<arch>-setup.exe     Inno Setup installer
-      portable   Clipline-<version>-<arch>-portable.zip  unzip and run, settings kept beside the exe
-      msix       Clipline-<version>-<arch>.msix          signed when a certificate is given
+      installer  Clipline-<version>-<arch>-setup.exe     Inno Setup installer; installs the
+                                                         Windows App Runtime when it is missing
+      portable   Clipline-<version>-<arch>-portable.zip  unzip and run: carries the Windows App
+                                                         Runtime, settings kept beside the exe
+      msix       Clipline-<version>.msixbundle           for the Microsoft Store, unsigned (the
+                                                         Store signs it); a single
+                                                         Clipline-<version>-<arch>.msix when
+                                                         built for one architecture
       exe        installer and portable
       all        all three (the default)
 
@@ -21,7 +26,7 @@
 .EXAMPLE
     pwsh build/build.ps1 -Target exe -Arch x64,arm64
 .EXAMPLE
-    pwsh build/build.ps1 -Target msix -CertificatePath build/certs/Clipline.pfx -CertificatePassword ****
+    pwsh build/build.ps1 -Target msix -Arch x64,arm64 -MsixIdentityName 12345Publisher.Clipline -MsixPublisher CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX -MsixPublisherDisplayName Publisher
 #>
 [CmdletBinding()]
 param(
@@ -33,12 +38,13 @@ param(
 
     [string] $OutputDir,
 
-    # A .pfx to sign the MSIX with. Its subject becomes the package's
-    # Publisher. Without one the MSIX is built unsigned.
-    [string] $CertificatePath = $env:MSIX_CERTIFICATE_PATH,
-    [string] $CertificatePassword = $env:MSIX_CERTIFICATE_PASSWORD,
-    # A RFC 3161 timestamp server, so the signature outlives the certificate.
-    [string] $TimestampUrl = $env:MSIX_TIMESTAMP_URL,
+    # The MSIX's identity, as Partner Center shows it under Product
+    # management → Product identity: Package/Identity/Name,
+    # Package/Identity/Publisher ("CN=<GUID>") and
+    # Package/Properties/PublisherDisplayName.
+    [string] $MsixIdentityName = $env:MSIX_IDENTITY_NAME,
+    [string] $MsixPublisher = $env:MSIX_PUBLISHER,
+    [string] $MsixPublisherDisplayName = $env:MSIX_PUBLISHER_DISPLAY_NAME,
 
     # Shown in the app's about section and the installer.
     [string] $RepositoryUrl = 'https://github.com/AlphaBrock/clipline'
@@ -106,29 +112,38 @@ function Find-Iscc {
     throw 'Inno Setup 6 was not found. Install it with: winget install JRSoftware.InnoSetup'
 }
 
-# MARK: Signing
+# MARK: Microsoft Store
 
-function Find-SignTool {
+function Find-SdkTool([string] $name) {
     # The Windows SDK build tools package the project already restores.
     $packages = (dotnet nuget locals global-packages --list) -replace '^global-packages:\s*', ''
     $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
-    $exe = Get-ChildItem (Join-Path $packages.Trim() 'microsoft.windows.sdk.buildtools') -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+    $exe = Get-ChildItem (Join-Path $packages.Trim() 'microsoft.windows.sdk.buildtools') -Recurse -Filter $name -ErrorAction SilentlyContinue |
         Where-Object { $_.Directory.Name -eq $arch } | Sort-Object FullName -Descending | Select-Object -First 1
     if ($exe) { return $exe.FullName }
-    $exe = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+    $exe = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter $name -ErrorAction SilentlyContinue |
         Where-Object { $_.Directory.Name -eq $arch } | Sort-Object FullName -Descending | Select-Object -First 1
     if ($exe) { return $exe.FullName }
-    throw 'signtool.exe was not found. It comes with the Microsoft.Windows.SDK.BuildTools package; run dotnet restore first.'
+    throw "$name was not found. It comes with the Microsoft.Windows.SDK.BuildTools package; run dotnet restore first."
 }
 
-$certificate = $null
-if ($targets.Contains('msix') -and $CertificatePath) {
-    $CertificatePath = [System.IO.Path]::GetFullPath($CertificatePath)
-    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-        $CertificatePath, $CertificatePassword,
-        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
-    Write-Host "Signing the MSIX as $($certificate.Subject)"
+# Nothing is signed: the Store signs the package with the identity it
+# reserved for the app, so the package has to carry exactly that identity.
+$identity = @()
+if ($targets.Contains('msix')) {
+    if ($MsixIdentityName -and $MsixPublisher -and $MsixPublisherDisplayName) {
+        if (-not $MsixPublisher.Trim().StartsWith('CN=')) {
+            throw "-MsixPublisher is Partner Center's Package/Identity/Publisher, such as CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX; got '$MsixPublisher'."
+        }
+        $identity = @("-p:MsixIdentityName=$($MsixIdentityName.Trim())", "-p:MsixPublisher=$($MsixPublisher.Trim())",
+            "-p:MsixPublisherDisplayName=$($MsixPublisherDisplayName.Trim())")
+        Write-Host "MSIX identity: $($MsixIdentityName.Trim()), $($MsixPublisher.Trim())"
+    }
+    else {
+        Write-Warning 'No Partner Center identity given (-MsixIdentityName, -MsixPublisher, -MsixPublisherDisplayName): the MSIX gets placeholders, which the Store will not accept.'
+    }
 }
+$msixFiles = @()
 
 # MARK: Build
 
@@ -136,49 +151,49 @@ foreach ($a in $Arch) {
     $rid = "win-$a"
     $platform = if ($a -eq 'arm64') { 'ARM64' } else { 'x64' }
 
-    if ($targets.Contains('installer') -or $targets.Contains('portable')) {
+    if ($targets.Contains('portable')) {
+        # Carries the Windows App Runtime, so it runs on a computer that has
+        # never had it, with nothing to install.
+        Step "Publishing the portable copy for $a"
+        $stage = Join-Path $work "portable-$a"
+        if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+        $folder = Join-Path $stage 'Clipline'
+        Invoke-Native dotnet (@('publish', $project, '-r', $rid, "-p:Platform=$platform",
+            '-p:WindowsAppSDKSelfContained=true', '-o', $folder) + $common)
+        # Its presence is what makes this copy portable: see AppInfo.cs.
+        Set-Content -Encoding utf8 (Join-Path $folder 'portable.txt') @(
+            'Clipline 便携版：设置、日志和剪贴板截图都保存在旁边的 data 文件夹里。'
+            '删除本文件后，它会像安装版一样把数据保存在 %LOCALAPPDATA%\Clipline。')
+        $zip = Join-Path $OutputDir "Clipline-$version-$a-portable.zip"
+        if (Test-Path $zip) { Remove-Item $zip }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($folder, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+        $made += $zip
+    }
+
+    if ($targets.Contains('installer')) {
         Step "Publishing the exe for $a"
         $publish = Join-Path $work "publish-$a"
         if (Test-Path $publish) { Remove-Item -Recurse -Force $publish }
         Invoke-Native dotnet (@('publish', $project, '-r', $rid, "-p:Platform=$platform", '-o', $publish) + $common)
 
-        if ($targets.Contains('portable')) {
-            Step "Zipping the portable copy for $a"
-            $stage = Join-Path $work "portable-$a"
-            if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-            $folder = Join-Path $stage 'Clipline'
-            New-Item -ItemType Directory -Force $folder | Out-Null
-            Copy-Item -Recurse (Join-Path $publish '*') $folder
-            # Its presence is what makes this copy portable: see AppInfo.cs.
-            Set-Content -Encoding utf8 (Join-Path $folder 'portable.txt') @(
-                'Clipline 便携版：设置、日志和剪贴板截图都保存在旁边的 data 文件夹里。'
-                '删除本文件后，它会像安装版一样把数据保存在 %LOCALAPPDATA%\Clipline。')
-            $zip = Join-Path $OutputDir "Clipline-$version-$a-portable.zip"
-            if (Test-Path $zip) { Remove-Item $zip }
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [System.IO.Compression.ZipFile]::CreateFromDirectory($folder, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-            $made += $zip
+        Step "Compiling the installer for $a"
+        $iss = Join-Path $PSScriptRoot 'installer\Clipline.iss'
+        $defines = @("/DAppVersion=$version", "/DArch=$a", "/DSourceDir=$publish", "/DOutputDir=$OutputDir", '/Q')
+        if ($RepositoryUrl) { $defines += "/DRepositoryUrl=$RepositoryUrl" }
+        # The Windows App Runtime the installer checks for, and fetches
+        # when it is missing.
+        $runtime = Get-WindowsAppRuntime
+        $defines += @("/DRuntimeName=$($runtime.Name)", "/DRuntimeChannel=$($runtime.Channel)",
+            "/DRuntimeMinVersion=$($runtime.MinVersion)", "/DRuntimeUrl=$($runtime.DownloadUrl -f $a)")
+        # Antivirus scanning the fresh setup.exe sometimes makes ISCC's
+        # final resource update fail ("EndUpdateResource failed"); a
+        # second try goes through.
+        for ($attempt = 1; ; $attempt++) {
+            try { Invoke-Native (Find-Iscc) ($defines + $iss); break }
+            catch { if ($attempt -ge 3) { throw }; Write-Warning "ISCC failed, trying again ($_)"; Start-Sleep -Seconds 3 }
         }
-
-        if ($targets.Contains('installer')) {
-            Step "Compiling the installer for $a"
-            $iss = Join-Path $PSScriptRoot 'installer\Clipline.iss'
-            $defines = @("/DAppVersion=$version", "/DArch=$a", "/DSourceDir=$publish", "/DOutputDir=$OutputDir", '/Q')
-            if ($RepositoryUrl) { $defines += "/DRepositoryUrl=$RepositoryUrl" }
-            # The Windows App Runtime the installer checks for, and fetches
-            # when it is missing.
-            $runtime = Get-WindowsAppRuntime
-            $defines += @("/DRuntimeName=$($runtime.Name)", "/DRuntimeChannel=$($runtime.Channel)",
-                "/DRuntimeMinVersion=$($runtime.MinVersion)", "/DRuntimeUrl=$($runtime.DownloadUrl -f $a)")
-            # Antivirus scanning the fresh setup.exe sometimes makes ISCC's
-            # final resource update fail ("EndUpdateResource failed"); a
-            # second try goes through.
-            for ($attempt = 1; ; $attempt++) {
-                try { Invoke-Native (Find-Iscc) ($defines + $iss); break }
-                catch { if ($attempt -ge 3) { throw }; Write-Warning "ISCC failed, trying again ($_)"; Start-Sleep -Seconds 3 }
-            }
-            $made += Join-Path $OutputDir "Clipline-$version-$a-setup.exe"
-        }
+        $made += Join-Path $OutputDir "Clipline-$version-$a-setup.exe"
     }
 
     if ($targets.Contains('msix')) {
@@ -188,33 +203,34 @@ foreach ($a in $Arch) {
         $msixArgs = @('publish', $project, '-r', $rid, "-p:Platform=$platform",
             '-p:WindowsPackageType=MSIX', '-p:GenerateAppxPackageOnBuild=true',
             "-p:AppxPackageDir=$packageDir\")
-        # The package's Publisher has to be the certificate's subject.
-        if ($certificate) { $msixArgs += "-p:MsixPublisher=$($certificate.Subject)" }
-        Invoke-Native dotnet ($msixArgs + $common)
+        Invoke-Native dotnet ($msixArgs + $identity + $common)
         $msix = Get-ChildItem $packageDir -Recurse -Filter '*.msix' | Select-Object -First 1
         if (-not $msix) { throw "No .msix came out of the build in $packageDir" }
-        $destination = Join-Path $OutputDir "Clipline-$version-$a.msix"
+        $destination = Join-Path $work "Clipline-$version-$a.msix"
         Copy-Item $msix.FullName $destination -Force
-        $made += $destination
-        if ($certificate) {
-            # Signed here rather than by MSBuild, whose signing task cannot
-            # open a password-protected .pfx when run from the dotnet CLI.
-            $sign = @('sign', '/fd', 'SHA256', '/f', $CertificatePath, '/p', $CertificatePassword)
-            if ($TimestampUrl) { $sign += @('/tr', $TimestampUrl, '/td', 'SHA256') }
-            Invoke-Native (Find-SignTool) ($sign + $destination)
-        }
-        else {
-            Write-Warning 'The MSIX is unsigned, so Windows will not install it. Sign it with -CertificatePath (see build/new-certificate.ps1).'
-        }
+        $msixFiles += $destination
     }
 }
 
-# A self-signed certificate is not trusted anywhere yet; ship its public
-# half so users can trust it before installing the MSIX.
-if ($certificate -and $certificate.Subject -eq $certificate.Issuer) {
-    $cer = Join-Path $OutputDir 'Clipline.cer'
-    [System.IO.File]::WriteAllBytes($cer, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-    $made += $cer
+# One bundle for every architecture, so a Store submission is a single
+# upload. Once a product has taken a bundle, the Store wants bundles from
+# then on, so release builds always make one.
+if ($msixFiles.Count -eq 1) {
+    $destination = Join-Path $OutputDir ([System.IO.Path]::GetFileName($msixFiles[0]))
+    Copy-Item $msixFiles[0] $destination -Force
+    $made += $destination
+}
+elseif ($msixFiles.Count -gt 1) {
+    Step 'Bundling the MSIX packages'
+    $bundleDir = Join-Path $work 'msixbundle'
+    if (Test-Path $bundleDir) { Remove-Item -Recurse -Force $bundleDir }
+    New-Item -ItemType Directory -Force $bundleDir | Out-Null
+    Copy-Item $msixFiles $bundleDir
+    $bundle = Join-Path $OutputDir "Clipline-$version.msixbundle"
+    # The packages' own version, x.y.z.0.
+    $bundleVersion = ($version -split '-')[0] + '.0'
+    Invoke-Native (Find-SdkTool 'makeappx.exe') @('bundle', '/d', $bundleDir, '/p', $bundle, '/bv', $bundleVersion, '/o')
+    $made += $bundle
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

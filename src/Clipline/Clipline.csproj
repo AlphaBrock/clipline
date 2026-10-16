@@ -14,14 +14,15 @@
     <!-- A plain .exe by default, with no MSIX package. build/build.ps1
          passes WindowsPackageType=MSIX for the package. -->
     <WindowsPackageType Condition="'$(WindowsPackageType)' == ''">None</WindowsPackageType>
-    <!-- The Windows App SDK is not carried along: it is two thirds of the
-         app's size, and Windows keeps one shared copy, the Windows App
-         Runtime, that many apps already installed. Where it is missing,
-         the exe asks to download it on launch (the SDK's bootstrapper does
-         that), the installer installs it, and App Installer fetches it for
-         the MSIX. Its version is MicrosoftWindowsAppSDKFoundationAppXVersion
-         from the package, which build/version.ps1 reads for the installer. -->
-    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <!-- The Windows App SDK is not carried along by default: it is two
+         thirds of the app's size, and Windows keeps one shared copy, the
+         Windows App Runtime, that many apps already installed. Where it is
+         missing, the installer installs it and the Store fetches it for the
+         MSIX. Its version is MicrosoftWindowsAppSDKFoundationAppXVersion
+         from the package, which build/version.ps1 reads for the installer.
+         The portable copy passes WindowsAppSDKSelfContained=true and
+         carries it, so it runs where nothing was ever installed. -->
+    <WindowsAppSDKSelfContained Condition="'$(WindowsAppSDKSelfContained)' == ''">false</WindowsAppSDKSelfContained>
     <!-- Brings the resource (PRI) and packaging build tasks along, so the
          dotnet CLI can build without Visual Studio. -->
     <EnableMsixTooling>true</EnableMsixTooling>
@@ -87,14 +88,22 @@
     <!-- Native files no code path loads: .NET's debugger and crash dump
          helpers, its alternative garbage collectors and HTTP/3, and the
          WebView2 control's runtime. Metadata (.winmd) is only needed to
-         compile against. Should the Windows App SDK ever be carried along
-         again (WindowsAppSDKSelfContained), add its unused parts here:
-         Microsoft.Windows.Widgets, PushNotificationsLongRunningTask.ProxyStub,
-         RestartAgent and the deployment extensions. -->
+         compile against. -->
     <UnusedFilePattern>(?i)(^|[\\/])(mscordaccore.*|mscordbi|createdump|clrgc|clrgcexp|msquic|Microsoft\.DiaSymReader\.Native\..*|Microsoft\.Web\.WebView2\.Core|WebView2Loader)\.(dll|exe)$|\.winmd$</UnusedFilePattern>
     <!-- Translated strings in 80-odd languages, should a library bring
          them; Chinese and English cover this app. -->
     <UnusedLanguagePattern>(?i)^(?!zh-|en-)[a-z]{2,3}(-[a-z0-9]+)*[\\/].*\.mui$</UnusedLanguagePattern>
+  </PropertyGroup>
+
+  <!-- The parts of the Windows App SDK a self-contained copy would carry
+       but nothing here calls: widgets, push notifications, and the restart
+       and deployment helpers. -->
+  <PropertyGroup Condition="'$(WindowsAppSDKSelfContained)' == 'true'">
+    <UnusedFilePattern>$(UnusedFilePattern)|(^|[\\/])(Microsoft\.Windows\.Widgets.*|PushNotificationsLongRunningTask.*|RestartAgent|.*DeploymentExtensions.*)\.(dll|exe)$</UnusedFilePattern>
+    <!-- Kept apart from the shared-runtime build, so the two never mix
+         their intermediate files. -->
+    <BaseOutputPath>bin\portable\</BaseOutputPath>
+    <IntermediateOutputPath>obj\portable\$(Configuration)\</IntermediateOutputPath>
   </PropertyGroup>
 
   <!-- The exe's publish folder… -->
@@ -122,8 +131,13 @@
          mixes their intermediate files. -->
     <BaseOutputPath>bin\msix\</BaseOutputPath>
     <IntermediateOutputPath>obj\msix\$(Configuration)\</IntermediateOutputPath>
-    <!-- Must match the subject of the certificate the package is signed with. -->
+    <!-- The package identity Partner Center reserved for the app (Product
+         management → Product identity). The Store signs the package with
+         it, so nothing is signed here. The defaults only make a package
+         that builds; the Store rejects it. -->
+    <MsixIdentityName Condition="'$(MsixIdentityName)' == ''">Clipline</MsixIdentityName>
     <MsixPublisher Condition="'$(MsixPublisher)' == ''">CN=Clipline</MsixPublisher>
+    <MsixPublisherDisplayName Condition="'$(MsixPublisherDisplayName)' == ''">Clipline</MsixPublisherDisplayName>
     <!-- MSIX versions are four plain numbers. -->
     <MsixVersion>$(VersionPrefix).0</MsixVersion>
     <StampedAppxManifest>obj\msix\$(Configuration)\$(RuntimeIdentifier)\Package.appxmanifest</StampedAppxManifest>
@@ -151,6 +165,8 @@
     </PropertyGroup>
     <Copy SourceFiles="Package.appxmanifest" DestinationFiles="$(StampedAppxManifest)" />
     <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Identity/@Version" Value="$(MsixVersion)" Namespaces="$(_AppxNamespace)" />
+    <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Identity/@Name" Value="$(MsixIdentityName)" Namespaces="$(_AppxNamespace)" />
     <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Identity/@Publisher" Value="$(MsixPublisher)" Namespaces="$(_AppxNamespace)" />
+    <XmlPoke XmlInputPath="$(StampedAppxManifest)" Query="/m:Package/m:Properties/m:PublisherDisplayName" Value="$(MsixPublisherDisplayName)" Namespaces="$(_AppxNamespace)" />
   </Target>
 </Project>

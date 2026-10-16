@@ -40,7 +40,17 @@
                 x:Name="RopePath"
                 Stroke="{ThemeResource RopeBrush}"
                 StrokeLineJoin="Round"
-                StrokeThickness="2" />
+                StrokeThickness="2.4" />
+            <!-- Light catching the top of the cord, so it reads as round. -->
+            <Path
+                x:Name="RopeShine"
+                Stroke="{ThemeResource RopeShineBrush}"
+                StrokeLineJoin="Round"
+                StrokeThickness="0.7">
+                <Path.RenderTransform>
+                    <TranslateTransform Y="-0.6" />
+                </Path.RenderTransform>
+            </Path>
 
             <Canvas x:Name="Photos" />
 
@@ -142,12 +152,38 @@
                                 <TextBox
                                     x:Name="SearchBox"
                                     Width="190"
+                                    MinWidth="0"
                                     MinHeight="28"
-                                    Padding="8,4,8,4"
+                                    Padding="12,4,12,4"
                                     VerticalAlignment="Center"
+                                    CornerRadius="14"
                                     FontSize="13"
                                     PlaceholderText="关键字，回车复制第一条"
-                                    Visibility="Collapsed" />
+                                    Visibility="Collapsed">
+                                    <!-- A field in the switch's own look: a faint well, lit
+                                         like the chosen side while typed into, with the
+                                         system's accent line under it. -->
+                                    <TextBox.Resources>
+                                        <ResourceDictionary>
+                                            <ResourceDictionary.ThemeDictionaries>
+                                            <ResourceDictionary x:Key="Light">
+                                                <SolidColorBrush x:Key="TextControlBackground" Color="#14000000" />
+                                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="#14000000" />
+                                                <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#FFFFFFFF" />
+                                                <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                                                <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                                            </ResourceDictionary>
+                                            <ResourceDictionary x:Key="Dark">
+                                                <SolidColorBrush x:Key="TextControlBackground" Color="#1FFFFFFF" />
+                                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="#1FFFFFFF" />
+                                                <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#38FFFFFF" />
+                                                <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                                                <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                                            </ResourceDictionary>
+                                            </ResourceDictionary.ThemeDictionaries>
+                                        </ResourceDictionary>
+                                    </TextBox.Resources>
+                                </TextBox>
                                 <TextBlock
                                     x:Name="SearchCount"
                                     Margin="8,0,8,0"
