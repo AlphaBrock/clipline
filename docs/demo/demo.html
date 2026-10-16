@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Clipline 演示动画</title>
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; width: 100vw; height: auto; max-width: 1920px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Clipline 功能演示动画。
+// 直接用浏览器打开会实时播放；docs/demo/record.js 用它逐帧录成 MP4。
+// 所有运动都由一个固定步长的模拟驱动（绳子是波动方程，卡片是挂在夹子上的摆），
+// 所以每次录出来的画面完全一样。
+
+const LOGO_SRC = "../../src/Clipline/Assets/Clipline.png";
+const C = document.getElementById("c");
+let X = C.getContext("2d");
+const W = 1920, H = 1080;
+const params = new URLSearchParams(location.search);
+const FPS = +(params.get("fps") || 60);
+const DT = 1 / FPS;
+const SUB = 8;
+const END = 55;
+let T = 0;
+
+const FONT = '"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif';
+const MONO = '"Cascadia Mono","Cascadia Code",Consolas,monospace';
+
+let seed = 11;
+const rnd = () => (seed = (seed * 16807) % 2147483647, (seed - 1) / 2147483646);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeBack = t => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+
+function rr(x, y, w, h, r, g = X) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function offscreen(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+function withCtx(g, fn) { const o = X; X = g; try { fn(); } finally { X = o; } }
+
+const logo = new Image();
+logo.src = LOGO_SRC;
+
+// ───────────────────────── 绳子 ─────────────────────────
+const N = 97, X0 = -40, DX = (W + 80) / (N - 1);
+const ry = new Float64Array(N), rv = new Float64Array(N), ra = new Float64Array(N), load = new Float64Array(N);
+const C2 = 1500 * 1500, ROPE_G = 110, ROPE_DAMP = 1.8, ROPE_TOP = 84;
+const HIDDEN = -470;
+let shift = HIDDEN, shiftV = 0, shiftTarget = HIDDEN, shiftAcc = 0;
+
+function ropeAt(arr, x) {
+  const f = clamp((x - X0) / DX, 0, N - 1.0001);
+  const i = Math.floor(f), u = f - i;
+  return arr[i] * (1 - u) + arr[i + 1] * u;
+}
+const ropeWorldY = x => ROPE_TOP + shift + ropeAt(ry, x);
+function nodeOf(x) { return clamp(Math.round((x - X0) / DX), 1, N - 2); }
+function kickRope(x, v, spread = 2) {
+  const i = nodeOf(x);
+  for (let k = -spread; k <= spread; k++) {
+    const j = i + k; if (j > 0 && j < N - 1) rv[j] += v * (1 - Math.abs(k) / (spread + 1));
+  }
+}
+
+function stepRope(h) {
+  load.fill(0);
+  for (const c of cards) {
+    if (c.state !== "hang" || c.x < 0 || c.x > W) continue;
+    const f = (c.x - X0) / DX, i = Math.floor(f), u = f - i;
+    const wgt = 1500 * c.mass * c.alpha;
+    load[i] += wgt * (1 - u); load[i + 1] += wgt * u;
+  }
+  for (let i = 1; i < N - 1; i++) {
+    const a = C2 * (ry[i - 1] + ry[i + 1] - 2 * ry[i]) / (DX * DX) + ROPE_G + load[i] - ROPE_DAMP * rv[i] - shiftAcc * 0.18;
+    rv[i] += a * h; ra[i] = a;
+  }
+  for (let i = 1; i < N - 1; i++) ry[i] += rv[i] * h;
+}
+
+// ───────────────────────── 卡片 ─────────────────────────
+const cards = [];
+const PEG_TOP = 12;      // 卡框顶边在夹子转轴下方多远
+const GRAV = 1900;
+
+function makeCard(o) {
+  const c = Object.assign({
+    x: 0, vx: 0, tx: 0, ax: 0, th: 0, om: 0, alpha: 1, ta: 1,
+    state: "hang", fy: 0, fvy: 0, press: 0, hover: 0, lift: 0, pinned: false, pinT: 0,
+    hidden: false, label: null, labelT: 0, kind: "photo",
+  }, o);
+  c.w = c.img.width + 14; c.h = c.img.height + 14;
+  c.L = PEG_TOP + c.h / 2;
+  c.Leff = (c.L * c.L + (c.w * c.w + c.h * c.h) / 12) / c.L;
+  c.mass = (c.w * c.h) / (264 * 174);
+  cards.push(c);
+  return c;
+}
+function pivotY(c) { return c.state === "fall" ? c.fy : ropeWorldY(c.x); }
+function cardPoint(c, lx, ly) {
+  const s = Math.sin(c.th), co = Math.cos(c.th), py = pivotY(c);
+  return [c.x + lx * co - ly * s, py + lx * s + ly * co];
+}
+function toLocal(c, mx, my) {
+  const dx = mx - c.x, dy = my - pivotY(c), s = Math.sin(c.th), co = Math.cos(c.th);
+  return [dx * co + dy * s, -dx * s + dy * co];
+}
+function inside(c, mx, my) {
+  const [lx, ly] = toLocal(c, mx, my);
+  return Math.abs(lx) < c.w / 2 && ly > PEG_TOP - 6 && ly < PEG_TOP + c.h;
+}
+
+function stepCard(c, h) {
+  // 夹子沿绳滑动：一个弹簧把它拉向目标位置
+  const ax = 16 * (c.tx - c.x) - 8 * c.vx;
+  c.vx += ax * h; c.x += c.vx * h; c.ax = ax;
+  c.alpha += (c.ta - c.alpha) * Math.min(1, h * 9);
+
+  let ay;
+  if (c.state === "fall") {
+    c.fvy += 2600 * h; c.fy += c.fvy * h; ay = 2600;
+    const ryw = ropeWorldY(c.x);
+    if (c.fy >= ryw) {
+      c.state = "hang";
+      kickRope(c.x, c.fvy * 0.42, 3);
+      c.om += (rnd() - .5) * 1.2;
+      ay = 0;
+    }
+  } else {
+    ay = 0.5 * (ropeAt(ra, c.x) + shiftAcc);
+  }
+  // 挂在夹子上的刚体摆：转轴加速度推着它摆
+  const wind = 0.35 * (Math.sin(0.9 * T - c.x * 0.004) + 0.6 * Math.sin(2.3 * T + c.x * 0.0021)) * (0.6 + 0.4 * Math.sin(0.27 * T));
+  const alpha = (-(GRAV - ay) * Math.sin(c.th) + 0.3 * c.ax * Math.cos(c.th)) / c.Leff - 2.0 * c.om + wind;
+  c.om += alpha * h; c.th = clamp(c.th + c.om * h, -.5, .5);
+}
+
+// ───────────────────────── 图片素材 ─────────────────────────
+function shot(w, h, fn) { const c = offscreen(w, h); const g = c.getContext("2d"); fn(g, w, h); return c; }
+
+const imgDashboard = shot(250, 160, (g, w, h) => {
+  g.fillStyle = "#F6F7FB"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#1F2A44"; g.fillRect(0, 0, 44, h);
+  for (let i = 0; i < 5; i++) { g.fillStyle = i === 1 ? "#5B8CFF" : "#3A4767"; rr(12, 18 + i * 22, 20, 10, 3, g); g.fill(); }
+  g.fillStyle = "#fff"; g.fillRect(44, 0, w, 22);
+  g.fillStyle = "#C9CFDD"; rr(54, 7, 60, 8, 4, g); g.fill();
+  const kc = ["#5B8CFF", "#22B07D", "#F5A524", "#EF5DA8"];
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle = "#fff"; rr(52 + i * 49, 30, 44, 30, 5, g); g.fill();
+    g.fillStyle = kc[i]; rr(57 + i * 49, 36, 18, 5, 2, g); g.fill();
+    g.fillStyle = "#2B3350"; rr(57 + i * 49, 46, 28, 8, 2, g); g.fill();
+  }
+  g.fillStyle = "#fff"; rr(52, 68, 190, 84, 6, g); g.fill();
+  const bars = [30, 46, 38, 58, 50, 66, 44, 72, 60, 52];
+  bars.forEach((b, i) => { g.fillStyle = i % 3 === 2 ? "#22B07D" : "#5B8CFF"; rr(62 + i * 17.5, 145 - b, 10, b, 2, g); g.fill(); });
+});
+
+const imgLandscape = shot(250, 160, (g, w, h) => {
+  const s = g.createLinearGradient(0, 0, 0, h); s.addColorStop(0, "#3B2C74"); s.addColorStop(.45, "#E7768A"); s.addColorStop(.75, "#FFB677"); g.fillStyle = s; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#FFE7B0"; g.beginPath(); g.arc(160, 92, 20, 0, 7); g.fill();
+  const hill = (col, base, amp, ph) => { g.fillStyle = col; g.beginPath(); g.moveTo(0, h); for (let x = 0; x <= w; x += 5) g.lineTo(x, base - amp * Math.sin(x / 38 + ph) - amp * .5 * Math.sin(x / 13 + ph * 2)); g.lineTo(w, h); g.fill(); };
+  hill("#8E4A78", 108, 14, 1); hill("#5B2F63", 122, 12, 3); hill("#2F1C45", 140, 9, 5);
+});
+
+const CODE = [
+  "// Clipline.Physics — 绳子按波动方程运动",
+  "public void Step(float dt)",
+  "{",
+  "    for (int i = 1; i < _y.Length - 1; i++)",
+  "    {",
+  "        float lap = _y[i - 1] + _y[i + 1] - 2 * _y[i];",
+  "        float a = Tension * lap / (Spacing * Spacing)",
+  "                + Gravity + _load[i] - Damping * _v[i];",
+  "        _v[i] += a * dt;",
+  "    }",
+  "    for (int i = 1; i < _y.Length - 1; i++)",
+  "        _y[i] += _v[i] * dt;",
+  "}",
+];
+const TOK = { com: "#7F8B99", kw: "#C792EA", num: "#F78C6C", type: "#82AAFF", fn: "#FFCB6B", id: "#E3E5EA", p: "#89DDFF", str: "#C3E88D" };
+function tokens(line) {
+  const out = [], re = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?f?\b)|(\b(?:public|private|void|for|int|float|var|new|return|if|else)\b)|([A-Z][A-Za-z0-9_]*(?=\())|([A-Z][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|(.)/g;
+  let m;
+  while ((m = re.exec(line))) {
+    const k = m[1] ? "com" : m[2] ? "str" : m[3] ? "num" : m[4] ? "kw" : m[5] ? "fn" : m[6] ? "type" : m[7] ? "id" : m[8] ? "ws" : "p";
+    out.push([m[0], k]);
+  }
+  return out;
+}
+function drawCode(g, lines, x, y, size, lh) {
+  g.font = `${size}px ${MONO}`; g.textBaseline = "top";
+  lines.forEach((ln, i) => {
+    let cx = x;
+    for (const [s, k] of tokens(ln)) {
+      g.font = (k === "com" ? "italic " : "") + `${size}px ${MONO}`;
+      if (k !== "ws") { g.fillStyle = TOK[k] || TOK.id; g.fillText(s, cx, y + i * lh); }
+      cx += g.measureText(s).width;
+    }
+  });
+}
+
+const imgCode = shot(250, 160, (g, w, h) => {
+  g.fillStyle = "#1B1D26"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#252836"; g.fillRect(0, 0, w, 16);
+  ["#FF5F57", "#FEBC2E", "#28C840"].forEach((c, i) => { g.fillStyle = c; g.beginPath(); g.arc(9 + i * 10, 8, 3, 0, 7); g.fill(); });
+  g.save(); g.scale(.62, .62); drawCode(g, CODE.slice(0, 13), 14, 34, 13, 17.5); g.restore();
+});
+
+const imgChat = shot(250, 160, (g, w, h) => {
+  g.fillStyle = "#EDEFF3"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#fff"; g.fillRect(0, 0, w, 20);
+  g.fillStyle = "#333"; g.font = `bold 9px ${FONT}`; g.fillText("产品讨论组 (8)", 10, 13);
+  const b = (right, y, bw, col) => { g.fillStyle = col; const x = right ? w - 26 - bw : 26; rr(x, y, bw, 18, 6, g); g.fill(); g.fillStyle = right ? "#7FB6FF" : "#C9CED8"; g.beginPath(); g.arc(right ? w - 13 : 13, y + 9, 8, 0, 7); g.fill(); };
+  b(false, 28, 120, "#fff"); b(true, 52, 90, "#95EC69"); b(false, 76, 150, "#fff"); b(false, 100, 70, "#fff"); b(true, 124, 130, "#95EC69");
+});
+
+const imgSheet = shot(250, 160, (g, w, h) => {
+  g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#1D7A45"; g.fillRect(0, 0, w, 18);
+  g.fillStyle = "#E8F3EC"; g.fillRect(0, 18, w, 14);
+  g.strokeStyle = "#D7DCE0"; g.lineWidth = 1;
+  for (let y = 32; y < h; y += 14) { g.beginPath(); g.moveTo(0, y + .5); g.lineTo(w, y + .5); g.stroke(); }
+  for (let x = 24; x < w; x += 45) { g.beginPath(); g.moveTo(x + .5, 18); g.lineTo(x + .5, h); g.stroke(); }
+  for (let r = 0; r < 9; r++) for (let k = 0; k < 5; k++) {
+    g.fillStyle = (r + k) % 4 === 0 ? "#9DB2C4" : "#C3CCD4"; rr(30 + k * 45, 37 + r * 14, 18 + ((r * 7 + k * 3) % 18), 5, 2, g); g.fill();
+  }
+  g.fillStyle = "rgba(29,122,69,.18)"; g.fillRect(69, 74, 90, 28); g.strokeStyle = "#1D7A45"; g.lineWidth = 2; g.strokeRect(69, 74, 90, 28);
+});
+
+const imgGame = shot(250, 160, (g, w, h) => {
+  const s = g.createLinearGradient(0, 0, w, h); s.addColorStop(0, "#0F2027"); s.addColorStop(.5, "#203A43"); s.addColorStop(1, "#2C5364"); g.fillStyle = s; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${.2 + (i % 5) * .12})`; g.fillRect((i * 53) % w, (i * 31) % 90, 1.5, 1.5); }
+  g.fillStyle = "#16313A"; g.beginPath(); g.moveTo(0, h); g.lineTo(0, 120); g.lineTo(60, 96); g.lineTo(120, 118); g.lineTo(190, 88); g.lineTo(w, 110); g.lineTo(w, h); g.fill();
+  g.fillStyle = "#57E3C3"; g.beginPath(); g.arc(80, 70, 9, 0, 7); g.fill();
+  g.strokeStyle = "rgba(87,227,195,.5)"; g.lineWidth = 3; g.beginPath(); g.moveTo(20, 90); g.quadraticCurveTo(50, 60, 72, 70); g.stroke();
+});
+
+// 便签
+function wrap(g, text, maxW, maxLines) {
+  const lines = []; let cur = "";
+  for (const ch of text) {
+    if (g.measureText(cur + ch).width > maxW && cur) { lines.push(cur); cur = ch; if (lines.length === maxLines) break; }
+    else cur += ch;
+  }
+  if (lines.length < maxLines && cur) lines.push(cur);
+  else if (lines.length === maxLines && cur) { let l = lines[maxLines - 1]; while (g.measureText(l + "…").width > maxW) l = l.slice(0, -1); lines[maxLines - 1] = l + "…"; }
+  return lines;
+}
+const KIND = {
+  text: ["文字", "#8A7F72"], link: ["链接", "#2F6FD6"], code: ["代码", "#8B6CF0"],
+  color: ["颜色", "#8A7F72"], mail: ["邮箱", "#0F8F7E"], path: ["路径", "#B7791F"],
+};
+function drawKindIcon(g, kind, x, y, col) {
+  g.save(); g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.6; g.lineCap = "round";
+  if (kind === "link") { rr(x, y + 3, 8, 6, 3, g); g.stroke(); rr(x + 5, y + 3, 8, 6, 3, g); g.stroke(); }
+  else if (kind === "code") { g.beginPath(); g.moveTo(x + 4, y + 2); g.lineTo(x, y + 6); g.lineTo(x + 4, y + 10); g.moveTo(x + 9, y + 2); g.lineTo(x + 13, y + 6); g.lineTo(x + 9, y + 10); g.stroke(); }
+  else if (kind === "mail") { rr(x, y + 2, 13, 9, 2, g); g.stroke(); g.beginPath(); g.moveTo(x, y + 3); g.lineTo(x + 6.5, y + 7); g.lineTo(x + 13, y + 3); g.stroke(); }
+  else if (kind === "path") { g.beginPath(); g.moveTo(x, y + 2); g.lineTo(x + 5, y + 2); g.lineTo(x + 6.5, y + 4); g.lineTo(x + 13, y + 4); g.lineTo(x + 13, y + 11); g.lineTo(x, y + 11); g.closePath(); g.stroke(); }
+  else if (kind === "color") { g.beginPath(); g.arc(x + 6.5, y + 6.5, 5.5, 0, 7); g.stroke(); g.beginPath(); g.arc(x + 6.5, y + 6.5, 2.5, 0, 7); g.fill(); }
+  else { for (let i = 0; i < 3; i++) { g.beginPath(); g.moveTo(x, y + 2 + i * 4); g.lineTo(x + (i === 2 ? 8 : 13), y + 2 + i * 4); g.stroke(); } }
+  g.restore();
+}
+function makeNote(spec) {
+  const IW = 236, P = 14, dark = spec.kind === "code";
+  const meas = offscreen(10, 10).getContext("2d");
+  let hh = P;
+  meas.font = `600 15px ${FONT}`;
+  const head = spec.heading ? wrap(meas, spec.heading, IW - 2 * P, 2) : [];
+  meas.font = `14px ${FONT}`;
+  const body = spec.kind === "code" ? spec.code : wrap(meas, spec.text, IW - 2 * P, spec.kind === "color" ? 1 : 5);
+  hh += (spec.kind === "color" ? 62 : 0) + head.length * 21 + (head.length ? 4 : 0) + body.length * (dark ? 17 : 21) + 14 + 18 + 4;
+  const c = offscreen(IW, Math.round(hh)), g = c.getContext("2d");
+  g.fillStyle = dark ? "#1E2027" : "#FFFDF8"; g.fillRect(0, 0, IW, hh);
+  let y = P; g.textBaseline = "top";
+  if (spec.kind === "color") {
+    g.fillStyle = spec.text; rr(P, y, IW - 2 * P, 52, 6, g); g.fill(); g.strokeStyle = "rgba(0,0,0,.09)"; g.stroke(); y += 62;
+  }
+  const [kname, kcol] = KIND[spec.kind];
+  g.font = `600 15px ${FONT}`; g.fillStyle = kcol;
+  head.forEach(l => { g.fillText(l, P, y); y += 21; }); if (head.length) y += 4;
+  if (dark) {
+    g.save(); g.beginPath(); g.rect(P, y, IW - 2 * P, body.length * 17); g.clip();
+    drawCode(g, body, P, y, 11.5, 17); g.restore(); y += body.length * 17;
+  } else {
+    g.font = `${spec.kind === "color" ? "600 " : ""}14px ${FONT}`; g.fillStyle = "#27241F";
+    body.forEach(l => { g.fillText(l, P, y); y += 21; });
+  }
+  y += 10; g.fillStyle = dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.07)"; g.fillRect(P, y, IW - 2 * P, 1); y += 8;
+  drawKindIcon(g, spec.kind, P, y - 1, dark ? "#B9A6FF" : kcol);
+  g.font = `600 12px ${FONT}`; g.fillStyle = dark ? "#B9A6FF" : kcol; g.fillText(kname, P + 19, y);
+  const kw = g.measureText(kname).width;
+  g.font = `12px ${FONT}`; g.fillStyle = dark ? "rgba(227,229,234,.55)" : "rgba(85,76,66,.64)";
+  g.fillText(`· ${spec.source}`, P + 25 + kw, y);
+  g.textAlign = "right"; g.fillText(spec.when, IW - P, y);
+  return c;
+}
+
+// ───────────────────────── 桌面 ─────────────────────────
+const wallpaper = shot(W, H, (g) => {
+  const b = g.createLinearGradient(0, 0, W, H); b.addColorStop(0, "#C9D9F7"); b.addColorStop(.55, "#DCD3F4"); b.addColorStop(1, "#F3D9E4"); g.fillStyle = b; g.fillRect(0, 0, W, H);
+  const blob = (x, y, r, col) => { const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, col); gr.addColorStop(1, "rgba(255,255,255,0)"); g.fillStyle = gr; g.fillRect(0, 0, W, H); };
+  blob(1500, 700, 700, "rgba(120,140,255,.55)"); blob(1200, 900, 520, "rgba(190,120,240,.45)"); blob(1750, 520, 420, "rgba(255,150,200,.35)"); blob(300, 200, 600, "rgba(255,255,255,.45)");
+});
+
+const EDIT = { x: 150, y: 300, w: 880, h: 600 };
+const CHAT = { x: 1110, y: 330, w: 650, h: 570 };
+const EDIT_LINES = [
+  ["# 0.1.1 发布计划", "h1"],
+  ["- 界面焕新：玻璃相框与木质晾衣夹", ""],
+  ["- 代码便签支持语法高亮", ""],
+  ["- 修复多显示器下绳子的位置", ""],
+  ["", ""],
+  ["周五发布 0.1.1，记得更新日志和商店截图", "sel"],
+  ["", ""],
+  ["## 待办", "h2"],
+  ["- [x] 录制演示视频", ""],
+  ["- [ ] 更新 README 里的动图", ""],
+];
+let editSel = 0;           // 选中文字的进度 0..1
+let chatImage = null, chatImageT = 0, chatReplyT = 0, chatDrop = 0;
+
+function drawWindow(r, title, icon) {
+  X.save(); X.shadowColor = "rgba(30,30,60,.28)"; X.shadowBlur = 50; X.shadowOffsetY = 18;
+  X.fillStyle = "#FBFBFD"; rr(r.x, r.y, r.w, r.h, 10); X.fill(); X.restore();
+  X.fillStyle = "#F0F1F5"; rr(r.x, r.y, r.w, 44, [10, 10, 0, 0]); X.fill();
+  X.fillStyle = icon; rr(r.x + 16, r.y + 13, 18, 18, 4); X.fill();
+  X.fillStyle = "#2A2A33"; X.font = `15px ${FONT}`; X.textBaseline = "middle"; X.fillText(title, r.x + 44, r.y + 23);
+  X.strokeStyle = "#555"; X.lineWidth = 1.2; const bx = r.x + r.w - 130;
+  X.beginPath(); X.moveTo(bx, r.y + 22); X.lineTo(bx + 11, r.y + 22); X.stroke();
+  X.strokeRect(bx + 46.5, r.y + 16.5, 10, 10);
+  X.beginPath(); X.moveTo(bx + 92, r.y + 17); X.lineTo(bx + 102, r.y + 27); X.moveTo(bx + 102, r.y + 17); X.lineTo(bx + 92, r.y + 27); X.stroke();
+}
+
+function drawEditor() {
+  drawWindow(EDIT, "发布计划.md - 记事本", "#4C8DF6");
+  X.textBaseline = "top";
+  let y = EDIT.y + 78;
+  for (const [txt, k] of EDIT_LINES) {
+    X.font = k === "h1" ? `bold 30px ${FONT}` : k === "h2" ? `bold 25px ${FONT}` : `23px ${FONT}`;
+    if (k === "sel" && editSel > 0) {
+      const tw = X.measureText(txt).width;
+      X.fillStyle = "rgba(76,141,246,.30)"; X.fillRect(EDIT.x + 48, y - 4, tw * editSel, 34);
+    }
+    X.fillStyle = k === "h1" || k === "h2" ? "#1E2230" : "#2E3240";
+    X.fillText(txt, EDIT.x + 48, y);
+    y += k === "h1" ? 56 : 44;
+  }
+}
+
+function drawChat() {
+  drawWindow(CHAT, "设计评审（6）", "#2BB673");
+  X.fillStyle = "#EEF0F4"; X.fillRect(CHAT.x, CHAT.y + 44, CHAT.w, CHAT.h - 44 - 90);
+  const bubble = (right, y, text, name, col) => {
+    X.font = `20px ${FONT}`; const tw = X.measureText(text).width;
+    const bx = right ? CHAT.x + CHAT.w - 76 - tw - 28 : CHAT.x + 76;
+    X.fillStyle = col; X.beginPath(); X.arc(right ? CHAT.x + CHAT.w - 40 : CHAT.x + 40, y + 20, 20, 0, 7); X.fill();
+    X.fillStyle = right ? "#95EC69" : "#fff"; rr(bx, y, tw + 28, 42, 8); X.fill();
+    X.fillStyle = "#1F1F1F"; X.textBaseline = "middle"; X.fillText(text, bx + 14, y + 21);
+  };
+  bubble(false, CHAT.y + 70, "新版的晾衣绳效果怎么样？", "", "#F5A524");
+  bubble(true, CHAT.y + 134, "我截个图给你看看", "", "#7C8CFF");
+  if (chatImage) {
+    const t = easeBack(clamp(chatImageT, 0, 1)), iw = 240, ih = iw * chatImage.height / chatImage.width;
+    const bx = CHAT.x + CHAT.w - 76 - iw - 12, by = CHAT.y + 198;
+    X.save(); X.globalAlpha = clamp(chatImageT * 2, 0, 1); X.translate(bx + iw, by); X.scale(t, t);
+    X.fillStyle = "#95EC69"; rr(-iw - 12, 0, iw + 12, ih + 12, 8); X.fill();
+    X.save(); rr(-iw - 6, 6, iw, ih, 5); X.clip(); X.drawImage(chatImage, -iw - 6, 6, iw, ih); X.restore();
+    X.restore();
+    if (chatReplyT > 0) { X.save(); X.globalAlpha = clamp(chatReplyT, 0, 1); bubble(false, by + ih + 32, "这个摆动好自然！", "", "#F5A524"); X.restore(); }
+  }
+  // 输入框
+  X.fillStyle = "#fff"; X.fillRect(CHAT.x, CHAT.y + CHAT.h - 90, CHAT.w, 1);
+  X.fillStyle = "#9AA0AA"; X.font = `18px ${FONT}`; X.textBaseline = "middle"; X.fillText("输入消息…", CHAT.x + 24, CHAT.y + CHAT.h - 45);
+  if (chatDrop > 0.01) {
+    X.save(); X.globalAlpha = chatDrop;
+    X.fillStyle = "rgba(43,182,115,.10)"; rr(CHAT.x + 10, CHAT.y + 54, CHAT.w - 20, CHAT.h - 64, 10); X.fill();
+    X.setLineDash([10, 8]); X.strokeStyle = "#2BB673"; X.lineWidth = 2.5; X.stroke(); X.setLineDash([]);
+    X.fillStyle = "#1E8C57"; X.font = `bold 24px ${FONT}`; X.textAlign = "center"; X.fillText("松开发送", CHAT.x + CHAT.w / 2, CHAT.y + CHAT.h - 140); X.textAlign = "left";
+    X.restore();
+  }
+}
+
+function drawTaskbar() {
+  X.fillStyle = "rgba(240,242,248,.86)"; X.fillRect(0, H - 56, W, 56);
+  X.fillStyle = "rgba(0,0,0,.08)"; X.fillRect(0, H - 56, W, 1);
+  const icons = ["#3B82F6", "#F59E0B", "#10B981", "#4C8DF6", "#2BB673", "#8B5CF6"];
+  const x0 = W / 2 - icons.length * 26;
+  icons.forEach((c, i) => {
+    X.fillStyle = c; rr(x0 + i * 52 + 8, H - 44, 32, 32, 7); X.fill();
+    if (i === 3 || i === 4) { X.fillStyle = "#6B7280"; rr(x0 + i * 52 + 18, H - 6, 12, 3, 2); X.fill(); }
+  });
+  // 托盘里的 Clipline 图标
+  if (logo.complete && logo.naturalWidth) X.drawImage(logo, W - 214, H - 40, 24, 24);
+  X.fillStyle = "#1F2937"; X.font = `14px ${FONT}`; X.textAlign = "right"; X.textBaseline = "middle";
+  X.fillText("10:24", W - 24, H - 37); X.fillText("2026/10/16", W - 24, H - 18); X.textAlign = "left";
+}
+
+function drawDesktop() {
+  X.drawImage(wallpaper, 0, 0);
+  drawEditor();
+  drawChat();
+  drawTaskbar();
+}
+
+// ───────────────────────── 绳子与卡片的绘制 ─────────────────────────
+function ropePath() {
+  X.beginPath();
+  for (let i = 0; i < N; i++) { const x = X0 + i * DX, y = ROPE_TOP + shift + ry[i]; i ? X.lineTo(x, y) : X.moveTo(x, y); }
+}
+function ropeGrad(a, rgb) {
+  const g = X.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(.07, `rgba(${rgb},${a})`); g.addColorStop(.93, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  return g;
+}
+function drawRope() {
+  if (shift < HIDDEN + 30) return;
+  X.save(); X.lineJoin = "round"; X.lineCap = "round";
+  ropePath(); X.strokeStyle = ropeGrad(.5, "255,255,255"); X.lineWidth = 8; X.stroke();
+  ropePath(); X.strokeStyle = ropeGrad(.9, "58,50,44"); X.lineWidth = 4; X.stroke();
+  X.translate(0, -1); ropePath(); X.strokeStyle = ropeGrad(.35, "255,255,255"); X.lineWidth = 1.2; X.stroke();
+  X.restore();
+}
+
+function drawPeg() {
+  const s = 1.5;
+  X.save(); X.scale(s, s); X.translate(-8, -8);
+  X.shadowColor = "rgba(40,20,0,.35)"; X.shadowBlur = 6; X.shadowOffsetY = 2;
+  const wood = X.createLinearGradient(1.5, 0, 14.5, 0);
+  wood.addColorStop(0, "#B98A5A"); wood.addColorStop(.35, "#DDB68A"); wood.addColorStop(.5, "#F0D3AC"); wood.addColorStop(.68, "#DDB68A"); wood.addColorStop(1, "#B98A5A");
+  X.fillStyle = wood; rr(1.5, 0, 13, 30, [4, 4, 5, 5]); X.fill();
+  X.shadowColor = "transparent";
+  X.strokeStyle = "rgba(96,58,24,.35)"; X.lineWidth = .5; X.stroke();
+  X.fillStyle = "rgba(107,68,34,.18)"; X.fillRect(5, 3, .6, 23); X.fillRect(11, 5, .6, 23);
+  X.fillStyle = "rgba(255,255,255,.22)"; rr(6.5, 2, 3, 26, 1.5); X.fill();
+  X.fillStyle = "rgba(90,58,28,.55)"; rr(7.5, 18, 1, 11, .5); X.fill();
+  const sp = X.createLinearGradient(0, 6, 0, 10.5); sp.addColorStop(0, "#F4F5F7"); sp.addColorStop(.45, "#B4B8BF"); sp.addColorStop(1, "#6D727A");
+  X.fillStyle = sp; rr(0, 6, 16, 4.5, 2.25); X.fill(); X.strokeStyle = "rgba(71,75,82,.5)"; X.stroke();
+  X.fillStyle = "rgba(255,255,255,.9)"; X.fillRect(2, 7.2, 12, .6);
+  X.restore();
+}
+
+function drawPin(x, y, on, a) {
+  X.save(); X.globalAlpha *= a;
+  X.fillStyle = on ? "#BF7430" : "rgba(32,32,32,.82)"; X.beginPath(); X.arc(x, y, 15, 0, 7); X.fill();
+  X.strokeStyle = "rgba(255,255,255,.55)"; X.lineWidth = 1; X.stroke();
+  X.translate(x, y); X.rotate(.6); X.fillStyle = "#fff"; X.strokeStyle = "#fff"; X.lineWidth = 1.8;
+  rr(-4, -8, 8, 8, 2); X.fill(); X.fillRect(-6.5, -1, 13, 2.5); X.beginPath(); X.moveTo(0, 1); X.lineTo(0, 8); X.stroke();
+  X.restore();
+}
+function drawClose(x, y, a) {
+  X.save(); X.globalAlpha *= a;
+  X.fillStyle = "rgba(32,32,32,.82)"; X.beginPath(); X.arc(x, y, 15, 0, 7); X.fill();
+  X.strokeStyle = "rgba(255,255,255,.55)"; X.lineWidth = 1; X.stroke();
+  X.strokeStyle = "#fff"; X.lineWidth = 2; X.lineCap = "round";
+  X.beginPath(); X.moveTo(x - 5, y - 5); X.lineTo(x + 5, y + 5); X.moveTo(x + 5, y - 5); X.lineTo(x - 5, y + 5); X.stroke();
+  X.restore();
+}
+
+function drawCard(c) {
+  if (c.alpha < .01 || c.x < -200 || c.x > W + 200) return;
+  const py = pivotY(c);
+  X.save(); X.globalAlpha = c.alpha; X.translate(c.x, py); X.rotate(c.th);
+  const s = 1 - c.press * .05 + c.lift * .02; X.scale(s, s);
+  const fw = c.w, fh = c.h, top = PEG_TOP;
+  X.save();
+  X.shadowColor = `rgba(25,20,50,${.26 + c.lift * .12})`; X.shadowBlur = 30 + c.lift * 16; X.shadowOffsetY = 12 + c.lift * 8;
+  const gl = X.createLinearGradient(0, top, 0, top + fh); gl.addColorStop(0, "rgba(255,255,255,.88)"); gl.addColorStop(1, "rgba(255,255,255,.74)");
+  X.fillStyle = gl; rr(-fw / 2, top, fw, fh, 14); X.fill(); X.restore();
+  const ed = X.createLinearGradient(0, top, 0, top + fh); ed.addColorStop(0, "rgba(255,255,255,1)"); ed.addColorStop(1, "rgba(255,255,255,.2)");
+  X.strokeStyle = ed; X.lineWidth = 1.2; rr(-fw / 2 + .5, top + .5, fw - 1, fh - 1, 14); X.stroke();
+  X.save(); rr(-fw / 2 + 7, top + 7, fw - 14, fh - 14, 8); X.clip(); X.drawImage(c.img, -fw / 2 + 7, top + 7); X.restore();
+  if (c.video) {
+    X.fillStyle = "rgba(32,32,32,.85)"; X.beginPath(); X.arc(0, top + fh / 2, 26, 0, 7); X.fill();
+    X.fillStyle = "#fff"; X.beginPath(); X.moveTo(-7, top + fh / 2 - 11); X.lineTo(12, top + fh / 2); X.lineTo(-7, top + fh / 2 + 11); X.fill();
+    X.fillStyle = "rgba(32,32,32,.85)"; rr(fw / 2 - 66, top + fh - 38, 50, 22, 5); X.fill();
+    X.fillStyle = "#fff"; X.font = `13px ${FONT}`; X.textBaseline = "middle"; X.textAlign = "center"; X.fillText("0:12", fw / 2 - 41, top + fh - 27); X.textAlign = "left";
+  }
+  const ctrl = Math.max(c.hover, c.pinned ? 1 : 0);
+  if (ctrl > .01) drawPin(-fw / 2 + 24, top + 24, c.pinned, ctrl);
+  if (c.hover > .01) drawClose(fw / 2 - 24, top + 24, c.hover);
+  drawPeg();
+  X.restore();
+
+  if (c.labelT > .01) {
+    const [kn, kc] = KIND[c.kind];
+    const lt = easeBack(clamp(c.labelT, 0, 1));
+    const [bx, by] = cardPoint(c, 0, PEG_TOP + c.h + 30);
+    X.save(); X.globalAlpha = clamp(c.labelT, 0, 1); X.translate(bx, by); X.scale(lt, lt);
+    X.font = `bold 20px ${FONT}`; const tw = X.measureText(kn).width + 36;
+    X.fillStyle = kc; rr(-tw / 2, -18, tw, 36, 18); X.fill();
+    X.fillStyle = "#fff"; X.textAlign = "center"; X.textBaseline = "middle"; X.fillText(kn, 0, 1);
+    X.restore();
+  }
+}
+
+// 绳下的「截图 / 文字」开关和搜索
+let side = "photos", sideT = 0, searchT = 0, query = "", searchCount = null;
+function drawToggle() {
+  const y = ROPE_TOP + shift + 336;
+  if (y < -60) return;
+  const w = 232, h = 44, x = W / 2 - w / 2 - searchT * 150;
+  X.save();
+  X.shadowColor = "rgba(30,30,60,.22)"; X.shadowBlur = 24; X.shadowOffsetY = 8;
+  X.fillStyle = "rgba(250,250,252,.88)"; rr(x, y, w, h, 22); X.fill(); X.restore();
+  X.strokeStyle = "rgba(255,255,255,.9)"; X.lineWidth = 1; rr(x + .5, y + .5, w - 1, h - 1, 22); X.stroke();
+  const st = ease(sideT);
+  X.fillStyle = "#fff"; X.save(); X.shadowColor = "rgba(0,0,0,.14)"; X.shadowBlur = 8; X.shadowOffsetY = 2;
+  rr(x + 4 + st * (w / 2 - 4), y + 4, w / 2 - 4, h - 8, 18); X.fill(); X.restore();
+  X.font = `bold 18px ${FONT}`; X.textBaseline = "middle"; X.textAlign = "center";
+  X.fillStyle = st < .5 ? "#1F2330" : "#7A7F8C"; X.fillText("截图", x + w / 4 + 10, y + h / 2 + 1);
+  X.fillStyle = st >= .5 ? "#1F2330" : "#7A7F8C"; X.fillText("文字", x + 3 * w / 4 + 10, y + h / 2 + 1);
+  // 小图标
+  X.strokeStyle = st < .5 ? "#1F2330" : "#7A7F8C"; X.lineWidth = 1.6; rr(x + w / 4 - 32, y + 15, 17, 14, 3); X.stroke();
+  X.beginPath(); X.arc(x + w / 4 - 23.5, y + 22, 3.5, 0, 7); X.stroke();
+  X.strokeStyle = st >= .5 ? "#1F2330" : "#7A7F8C";
+  for (let i = 0; i < 3; i++) { X.beginPath(); X.moveTo(x + 3 * w / 4 - 32, y + 16 + i * 5.5); X.lineTo(x + 3 * w / 4 - (i === 2 ? 22 : 16), y + 16 + i * 5.5); X.stroke(); }
+  X.textAlign = "left";
+
+  // 搜索
+  if (st > .02) {
+    const sx = x + w + 12, sw = 44 + searchT * 290;
+    X.save(); X.globalAlpha = st;
+    X.save(); X.shadowColor = "rgba(30,30,60,.22)"; X.shadowBlur = 24; X.shadowOffsetY = 8;
+    X.fillStyle = "rgba(250,250,252,.92)"; rr(sx, y, sw, h, 22); X.fill(); X.restore();
+    X.strokeStyle = searchT > .5 ? "rgba(139,108,240,.75)" : "rgba(255,255,255,.9)"; X.lineWidth = searchT > .5 ? 2 : 1; rr(sx + .5, y + .5, sw - 1, h - 1, 22); X.stroke();
+    X.strokeStyle = "#3A3F4C"; X.lineWidth = 2.2; X.beginPath(); X.arc(sx + 20, y + 20, 7, 0, 7); X.stroke();
+    X.beginPath(); X.moveTo(sx + 25, y + 25); X.lineTo(sx + 30, y + 30); X.stroke();
+    if (searchT > .3) {
+      X.save(); X.beginPath(); X.rect(sx + 40, y, sw - 50, h); X.clip();
+      X.font = `20px ${FONT}`; X.textBaseline = "middle";
+      if (query) { X.fillStyle = "#1F2330"; X.fillText(query, sx + 44, y + h / 2 + 1); }
+      else { X.fillStyle = "#9AA0AA"; X.fillText("搜索复制过的文字", sx + 44, y + h / 2 + 1); }
+      const qw = query ? X.measureText(query).width : 0;
+      if (Math.floor(T * 2) % 2 === 0) { X.fillStyle = "#8B6CF0"; X.fillRect(sx + 45 + qw, y + 11, 2, 22); }
+      if (searchCount !== null) { X.fillStyle = "#8B6CF0"; X.font = `bold 17px ${FONT}`; X.textAlign = "right"; X.fillText(`${searchCount} 条`, sx + sw - 18, y + h / 2 + 1); X.textAlign = "left"; }
+      X.restore();
+    }
+    X.restore();
+  }
+}
+
+// 双击后展开的全文
+let reader = null, readerT = 0, readerTarget = 0;
+function drawReader() {
+  if (!reader || readerT < .005) return;
+  const t = easeOut(readerT);
+  const c = reader;
+  const [fx, fy] = cardPoint(c, 0, PEG_TOP);
+  const from = { x: fx - c.w / 2, y: fy, w: c.w, h: c.h };
+  const to = { x: 400, y: 200, w: 1120, h: 610 };
+  const r = { x: lerp(from.x, to.x, t), y: lerp(from.y, to.y, t), w: lerp(from.w, to.w, t), h: lerp(from.h, to.h, t) };
+  X.save();
+  X.fillStyle = `rgba(15,15,25,${.35 * t})`; X.fillRect(0, 0, W, H);
+  X.shadowColor = "rgba(0,0,0,.45)"; X.shadowBlur = 60; X.shadowOffsetY = 24;
+  X.fillStyle = "#1E2027"; rr(r.x, r.y, r.w, r.h, lerp(10, 16, t)); X.fill(); X.restore();
+  X.save(); rr(r.x, r.y, r.w, r.h, 16); X.clip();
+  X.globalAlpha = seg(readerT, .45, 1);
+  X.fillStyle = "#262934"; X.fillRect(r.x, r.y, r.w, 64);
+  drawKindIcon(X, "code", r.x + 28, r.y + 26, "#B9A6FF");
+  X.font = `bold 20px ${FONT}`; X.fillStyle = "#B9A6FF"; X.textBaseline = "middle"; X.fillText("代码", r.x + 52, r.y + 33);
+  X.font = `18px ${FONT}`; X.fillStyle = "rgba(227,229,234,.6)"; X.fillText("· Visual Studio Code · 13 行 · 8 分钟前", r.x + 100, r.y + 33);
+  X.textAlign = "right"; X.fillText("Esc 关闭", r.x + r.w - 28, r.y + 33); X.textAlign = "left";
+  const lh = 36, y0 = r.y + 92;
+  X.fillStyle = "#1A1C22"; X.fillRect(r.x, r.y + 64, 70, r.h);
+  X.font = `19px ${MONO}`; X.textAlign = "right"; X.textBaseline = "top";
+  CODE.forEach((_, i) => { X.fillStyle = i === 5 ? "#E3E5EA" : "rgba(227,229,234,.32)"; X.fillText(String(i + 1), r.x + 52, y0 + i * lh + 2); });
+  X.textAlign = "left";
+  X.fillStyle = "rgba(255,255,255,.045)"; X.fillRect(r.x + 70, y0 + 5 * lh - 6, r.w, lh);
+  drawCode(X, CODE, r.x + 96, y0, 21, lh);
+  X.restore();
+}
+
+// ───────────────────────── 叠加层：字幕、按键、光标 ─────────────────────────
+const captions = [
+  [4.0, 8.2, "1", "把鼠标推到屏幕顶边，晾衣绳就滑下来"],
+  [8.4, 14.4, "2", "截图之后，新照片落到绳上，晃两下"],
+  [14.6, 19.6, "3", "单击复制图片，拖进聊天窗口直接发送"],
+  [19.8, 23.4, "4", "点左上角的图钉置顶，常用的一直排在最前"],
+  [23.6, 27.0, "5", "绳子和照片是实时物理模拟：拨一下，它就晃"],
+  [27.2, 31.0, "6", "切到「文字」：复制过的文字像便签一样夹在绳上"],
+  [31.2, 35.6, "7", "复制一段文字，新便签马上夹上来"],
+  [35.8, 39.6, "8", "链接、颜色、代码和邮箱，各有各的样子"],
+  [39.8, 44.4, "9", "搜索：输入关键字，只留下包含它的便签"],
+  [44.6, 49.4, "10", "双击看全文：代码像在编辑器里，带行号和高亮"],
+];
+function drawCaption() {
+  for (const [a, b, n, text] of captions) {
+    if (T < a || T > b) continue;
+    const k = Math.min(seg(T, a, a + .35), 1 - seg(T, b - .3, b));
+    X.save(); X.globalAlpha = k; X.translate(0, (1 - easeOut(k)) * 16);
+    X.font = `600 34px ${FONT}`; const tw = X.measureText(text).width;
+    const w = tw + 120, x = W / 2 - w / 2, y = 930;
+    X.shadowColor = "rgba(0,0,0,.3)"; X.shadowBlur = 30; X.shadowOffsetY = 10;
+    X.fillStyle = "rgba(22,22,32,.82)"; rr(x, y, w, 70, 35); X.fill(); X.shadowColor = "transparent";
+    X.fillStyle = "#D99A5B"; X.beginPath(); X.arc(x + 42, y + 35, 21, 0, 7); X.fill();
+    X.fillStyle = "#fff"; X.font = `bold ${n.length > 1 ? 18 : 22}px ${FONT}`; X.textAlign = "center"; X.textBaseline = "middle"; X.fillText(n, x + 42, y + 36);
+    X.font = `600 34px ${FONT}`; X.textAlign = "left"; X.fillText(text, x + 80, y + 37);
+    X.restore();
+  }
+}
+
+let keys = null, keysT0 = 0, keysT1 = 0;
+function showKeys(list, dur) { keys = list; keysT0 = T; keysT1 = T + dur; }
+function drawKeys() {
+  if (!keys || T > keysT1) return;
+  const k = Math.min(seg(T, keysT0, keysT0 + .2), 1 - seg(T, keysT1 - .25, keysT1));
+  X.save(); X.globalAlpha = k;
+  X.font = `bold 30px ${FONT}`;
+  const ws = keys.map(s => Math.max(76, X.measureText(s).width + 44));
+  const total = ws.reduce((a, b) => a + b, 0) + (keys.length - 1) * 50;
+  let x = W / 2 - total / 2; const y = 810;
+  keys.forEach((s, i) => {
+    const p = seg(T, keysT0 + .1 + i * .1, keysT0 + .25 + i * .1), dip = p > 0 && p < 1 ? 4 : 0;
+    X.shadowColor = "rgba(0,0,0,.25)"; X.shadowBlur = 20; X.shadowOffsetY = 6;
+    X.fillStyle = "#C9CCD6"; rr(x, y + 6, ws[i], 70, 12); X.fill(); X.shadowColor = "transparent";
+    X.fillStyle = "#FDFDFE"; rr(x, y + dip, ws[i], 64, 12); X.fill();
+    X.fillStyle = "#1F2330"; X.textAlign = "center"; X.textBaseline = "middle"; X.fillText(s, x + ws[i] / 2, y + 33 + dip);
+    x += ws[i];
+    if (i < keys.length - 1) { X.fillStyle = "#fff"; X.font = `bold 36px ${FONT}`; X.fillText("+", x + 25, y + 34); X.font = `bold 30px ${FONT}`; }
+    x += 50;
+  });
+  X.restore();
+}
+
+let toast = null;
+function showToast(text, x, y, dur = 1.1) { toast = { text, x, y, t0: T, t1: T + dur }; }
+function drawToast() {
+  if (!toast || T > toast.t1) return;
+  const k = Math.min(seg(T, toast.t0, toast.t0 + .18), 1 - seg(T, toast.t1 - .2, toast.t1));
+  X.save(); X.globalAlpha = k; X.translate(toast.x, toast.y - easeOut(k) * 10);
+  X.font = `600 22px ${FONT}`; const w = X.measureText(toast.text).width + 70;
+  X.shadowColor = "rgba(0,0,0,.3)"; X.shadowBlur = 20; X.shadowOffsetY = 6;
+  X.fillStyle = "rgba(28,28,36,.92)"; rr(-w / 2, -24, w, 48, 24); X.fill(); X.shadowColor = "transparent";
+  X.strokeStyle = "#7BE0A8"; X.lineWidth = 3; X.lineCap = "round"; X.lineJoin = "round";
+  X.beginPath(); X.moveTo(-w / 2 + 22, 0); X.lineTo(-w / 2 + 29, 7); X.lineTo(-w / 2 + 42, -7); X.stroke();
+  X.fillStyle = "#fff"; X.textBaseline = "middle"; X.fillText(toast.text, -w / 2 + 52, 1);
+  X.restore();
+}
+
+// 光标：关键帧，目标可以是固定坐标，也可以是跟着卡片走的函数
+const path = [];
+function at(t, p) { path.push([t, p]); }
+const resolve = p => typeof p === "function" ? p() : p;
+function cursorAt(t) {
+  if (t <= path[0][0]) return resolve(path[0][1]);
+  for (let i = 0; i < path.length - 1; i++) {
+    const [ta, pa] = path[i], [tb, pb] = path[i + 1];
+    if (t <= tb) { const a = resolve(pa), b = resolve(pb), u = ease(seg(t, ta, tb)); return [lerp(a[0], b[0], u), lerp(a[1], b[1], u)]; }
+  }
+  return resolve(path[path.length - 1][1]);
+}
+let mouse = [1300, 700], mouseV = [0, 0], cursorShown = 0, pressed = false;
+const ripples = [];
+function click(x, y) { ripples.push({ x, y, t0: T }); }
+function drawCursor() {
+  for (const r of ripples) {
+    const p = seg(T, r.t0, r.t0 + .5); if (p <= 0 || p >= 1) continue;
+    X.strokeStyle = `rgba(255,255,255,${.9 * (1 - p)})`; X.lineWidth = 3; X.beginPath(); X.arc(r.x, r.y, 10 + p * 34, 0, 7); X.stroke();
+    X.strokeStyle = `rgba(80,90,255,${.5 * (1 - p)})`; X.lineWidth = 2; X.beginPath(); X.arc(r.x, r.y, 6 + p * 26, 0, 7); X.stroke();
+  }
+  if (cursorShown < .01) return;
+  const [x, y] = mouse;
+  X.save(); X.globalAlpha = cursorShown; X.translate(x, y); X.scale(1.45, 1.45);
+  if (pressed) X.scale(.92, .92);
+  X.shadowColor = "rgba(0,0,0,.35)"; X.shadowBlur = 6; X.shadowOffsetY = 2;
+  X.beginPath(); X.moveTo(0, 0); X.lineTo(0, 22); X.lineTo(5.5, 17); X.lineTo(9.5, 26); X.lineTo(13, 24.5); X.lineTo(9, 16); X.lineTo(16, 16); X.closePath();
+  X.fillStyle = "#fff"; X.fill(); X.shadowColor = "transparent"; X.strokeStyle = "#111"; X.lineWidth = 1.3; X.lineJoin = "round"; X.stroke();
+  X.restore();
+}
+
+// 截图状态
+let snip = 0, snipRect = null, flash = 0;
+function drawSnip() {
+  if (snip < .01) return;
+  X.save(); X.globalAlpha = snip;
+  X.beginPath(); X.rect(0, 0, W, H);
+  if (snipRect) X.rect(snipRect.x + snipRect.w, snipRect.y, -snipRect.w, snipRect.h);
+  X.fillStyle = "rgba(10,10,20,.45)"; X.fill("evenodd");
+  if (snipRect && snipRect.w > 2) { X.strokeStyle = "#fff"; X.lineWidth = 2; X.strokeRect(snipRect.x, snipRect.y, snipRect.w, snipRect.h); }
+  const tw = 250, tx = W / 2 - tw / 2, ty = 26;
+  X.fillStyle = "rgba(245,245,248,.96)"; rr(tx, ty, tw, 52, 10); X.fill();
+  for (let i = 0; i < 4; i++) {
+    X.fillStyle = i === 0 ? "rgba(76,141,246,.18)" : "transparent"; rr(tx + 12 + i * 58, ty + 8, 46, 36, 6); X.fill();
+    X.strokeStyle = i === 0 ? "#2563EB" : "#444"; X.lineWidth = 2;
+    if (i === 0) X.strokeRect(tx + 24, ty + 16, 22, 18);
+    else if (i === 1) { X.beginPath(); X.moveTo(tx + 85, ty + 17); X.lineTo(tx + 105, ty + 20); X.lineTo(tx + 98, ty + 34); X.lineTo(tx + 82, ty + 31); X.closePath(); X.stroke(); }
+    else if (i === 2) { rr(tx + 140, ty + 16, 24, 18, 2); X.stroke(); }
+    else { X.strokeRect(tx + 196, ty + 15, 26, 20); X.strokeRect(tx + 200, ty + 19, 18, 12); }
+  }
+  X.restore();
+}
+
+// 片头片尾
+function drawTitle(k, outro) {
+  if (k < .005) return;
+  X.save(); X.globalAlpha = k;
+  const g = X.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#1A1626"); g.addColorStop(1, "#2B2140"); X.fillStyle = g; X.fillRect(0, 0, W, H);
+  const glow = X.createRadialGradient(W / 2, 420, 0, W / 2, 420, 600); glow.addColorStop(0, "rgba(217,154,91,.25)"); glow.addColorStop(1, "rgba(217,154,91,0)"); X.fillStyle = glow; X.fillRect(0, 0, W, H);
+  // 一根小绳子和三只夹子
+  X.strokeStyle = "rgba(242,236,230,.7)"; X.lineWidth = 3; X.beginPath(); X.moveTo(560, 160); X.quadraticCurveTo(W / 2, 220, W - 560, 160); X.stroke();
+  const t0 = outro ? 50 : 0;
+  const lu = easeOut(seg(T, t0 + .2, t0 + 1.1));
+  X.save(); X.translate(0, (1 - lu) * 30); X.globalAlpha *= lu;
+  if (logo.complete && logo.naturalWidth) X.drawImage(logo, W / 2 - 90, 250, 180, 180);
+  X.fillStyle = "#fff"; X.font = `bold 104px "Segoe UI",${FONT}`; X.textAlign = "center"; X.textBaseline = "middle";
+  X.fillText("Clipline", W / 2, 520);
+  X.restore();
+  const su = easeOut(seg(T, t0 + .7, t0 + 1.6));
+  X.save(); X.globalAlpha *= su; X.translate(0, (1 - su) * 20);
+  X.fillStyle = "rgba(255,255,255,.82)"; X.font = `36px ${FONT}`; X.textAlign = "center"; X.textBaseline = "middle";
+  X.fillText("把截图、录屏和复制过的文字，晾在屏幕顶边的一根绳子上", W / 2, 620);
+  X.restore();
+  if (outro) {
+    const chips = ["鼠标碰顶边即出现", "截图自动挂上", "单击复制 · 拖拽发送", "图钉置顶", "文字便签 · 代码高亮", "关键字搜索", "实时物理动画"];
+    X.font = `24px ${FONT}`;
+    const ws = chips.map(c => X.measureText(c).width + 44), gap = 16;
+    const rows = [chips.slice(0, 4), chips.slice(4)];
+    let idx = 0;
+    rows.forEach((row, ri) => {
+      const rw = row.reduce((a, _, j) => a + ws[idx + j], 0) + gap * (row.length - 1);
+      let x = W / 2 - rw / 2;
+      row.forEach((c, j) => {
+        const p = easeOut(seg(T, t0 + 1.4 + (idx + j) * .12, t0 + 1.9 + (idx + j) * .12));
+        X.save(); X.globalAlpha *= p; X.translate(0, (1 - p) * 14);
+        X.fillStyle = "rgba(255,255,255,.1)"; rr(x, 710 + ri * 66, ws[idx + j], 48, 24); X.fill();
+        X.strokeStyle = "rgba(217,154,91,.6)"; X.lineWidth = 1.5; X.stroke();
+        X.fillStyle = "#F4E7DA"; X.textAlign = "center"; X.textBaseline = "middle"; X.fillText(c, x + ws[idx + j] / 2, 735 + ri * 66);
+        X.restore();
+        x += ws[idx + j] + gap;
+      });
+      idx += row.length;
+    });
+    const fp = seg(T, t0 + 2.6, t0 + 3.4);
+    X.globalAlpha *= fp; X.fillStyle = "rgba(255,255,255,.55)"; X.font = `24px ${FONT}`; X.textAlign = "center";
+    X.fillText("Windows 10 2004+ / Windows 11  ·  x64 与 ARM64  ·  github.com/AlphaBrock/clipline", W / 2, 920);
+  }
+  X.restore();
+}
+
+// ───────────────────────── 场景 ─────────────────────────
+const photos = [imgDashboard, imgLandscape, imgCode, imgChat, imgSheet, imgGame].map((img, i) =>
+  makeCard({ img, video: i === 5, side: "photos" }));
+const noteSpecs = [
+  { kind: "text", text: "晾衣绳是一根有张力的弦：照片落上去，波会往两边传；挂得越多、越重，垂得越深。", source: "微信", when: "1 分钟前" },
+  { kind: "link", heading: "AlphaBrock/clipline", text: "https://github.com/AlphaBrock/clipline", source: "Edge", when: "3 分钟前" },
+  { kind: "code", code: CODE.slice(0, 6), text: CODE.join("\n"), source: "VS Code", when: "8 分钟前" },
+  { kind: "color", text: "#8B6CF0", source: "Figma", when: "12 分钟前" },
+  { kind: "mail", heading: "team@example.com", text: "设计评审的邮件组", source: "Outlook", when: "20 分钟前" },
+  { kind: "path", heading: "settings.json", text: "C:\\Users\\me\\AppData\\Local\\Clipline\\settings.json", source: "资源管理器", when: "半小时前" },
+];
+const notes = noteSpecs.map(s => makeCard({ img: makeNote(s), kind: s.kind, side: "notes", search: ((s.heading || "") + " " + s.text).toLowerCase() }));
+const order = { photos: [...photos], notes: [...notes] };
+
+function relayout(stagger = 0) {
+  for (const sd of ["photos", "notes"]) {
+    const list = order[sd].filter(c => !c.hidden).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    list.forEach((c, i) => {
+      const tx = sd === side ? 260 + i * 300 : sd === "photos" ? -400 - (list.length - i) * 300 : W + 400 + i * 300;
+      if (stagger) later(stagger * (sd === side ? i : list.length - i), () => c.tx = tx); else c.tx = tx;
+    });
+    order[sd].filter(c => c.hidden).forEach(c => c.ta = 0);
+    list.forEach(c => c.ta = 1);
+  }
+}
+relayout();
+for (const c of cards) c.x = c.tx;
+
+// 事件
+const events = [];
+function on(t, fn) { events.push({ t, fn }); }
+function later(dt, fn) { events.push({ t: T + dt, fn }); }
+
+function cardOf(sd, i) { return order[sd].filter(c => !c.hidden).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))[i]; }
+let newPhoto = null, newNote = null, pinTarget = photos[3], codeNote = notes[2], dragCard = null;
+
+// —— 1：碰顶边
+at(0, [1300, 700]);
+at(4.2, [1300, 700]);
+at(5.2, [900, 3]);
+on(5.35, () => { shiftTarget = 0; });
+at(5.9, [900, 3]);
+at(7.2, [960, 560]);
+// —— 2：截图
+at(8.4, [960, 560]);
+at(9.2, [700, 640]);
+on(8.9, () => { shiftTarget = HIDDEN; });
+on(9.5, () => showKeys(["Win", "Shift", "S"], 1.3));
+on(10.1, () => { snipOn = true; });
+at(10.7, [190, 340]);
+on(10.8, () => { pressed = true; click(190, 340); snipRect = { x: 190, y: 340, w: 0, h: 0 }; });
+at(11.7, [1010, 880]);
+on(11.8, () => {
+  pressed = false; flash = 1; snipOn = false;
+  const r = { ...snipRect }, full = offscreen(W, H);
+  withCtx(full.getContext("2d"), drawDesktop);
+  const img = offscreen(250, 168), g = img.getContext("2d");
+  const sh = r.w * 168 / 250;
+  g.drawImage(full, r.x, r.y + (r.h - sh) / 2, r.w, sh, 0, 0, 250, 168);
+  snipRect = null;
+  newPhoto = makeCard({ img, side: "photos" });
+  order.photos.unshift(newPhoto);
+  newPhoto.state = "fall";
+});
+on(12.0, () => { shiftTarget = 0; relayout(); newPhoto.x = newPhoto.tx; newPhoto.fy = -260; newPhoto.fvy = 0; });
+at(12.4, [1010, 880]);
+// —— 3：单击复制、拖进聊天
+at(13.6, () => cardPoint(newPhoto, 20, 110));
+at(15.2, () => cardPoint(newPhoto, 20, 110));
+on(15.3, () => { const [x, y] = mouse; click(x, y); pressed = true; newPhoto.press = 1; kickRope(newPhoto.x, 160); });
+on(15.45, () => { pressed = false; showToast("已复制图片", mouse[0], mouse[1] - 60); });
+at(16.5, () => cardPoint(newPhoto, 20, 110));
+on(16.55, () => { pressed = true; dragCard = newPhoto; click(mouse[0], mouse[1]); });
+at(18.0, [1450, 650]);
+at(18.3, [1450, 650]);
+on(18.3, () => { pressed = false; dragCard = null; chatImage = newPhoto.img; chatImageT = .001; });
+on(19.2, () => { chatReplyT = .001; });
+// —— 4：图钉置顶
+at(19.2, [1450, 650]);
+at(20.6, () => cardPoint(pinTarget, -pinTarget.w / 2 + 24, PEG_TOP + 24));
+at(21.0, () => cardPoint(pinTarget, -pinTarget.w / 2 + 24, PEG_TOP + 24));
+on(21.0, () => { click(...mouse); pressed = true; pinTarget.press = 1; });
+on(21.15, () => { pressed = false; pinTarget.pinned = true; relayout(); showToast("已置顶", mouse[0] + 20, mouse[1] + 110); });
+at(22.6, () => cardPoint(pinTarget, -pinTarget.w / 2 + 24, PEG_TOP + 24));
+// —— 5：拨动
+at(23.6, [60, 300]);
+at(24.4, [1880, 250]);
+at(24.9, [1880, 130]);
+at(25.7, [60, 120]);
+at(26.6, [700, 520]);
+// —— 6：切到文字
+at(27.6, () => [W / 2 + 58 + 10, ROPE_TOP + shift + 358]);
+at(28.0, () => [W / 2 + 58 + 10, ROPE_TOP + shift + 358]);
+on(28.0, () => { click(...mouse); pressed = true; });
+on(28.15, () => { pressed = false; side = "notes"; relayout(.09); });
+at(29.6, () => [W / 2 + 58 + 10, ROPE_TOP + shift + 358]);
+// —— 7：复制文字
+at(31.0, [700, 620]);
+on(31.3, () => { shiftTarget = HIDDEN; });
+at(31.9, [198, 528]);
+on(32.0, () => { pressed = true; click(198, 528); });
+at(32.9, [738, 528]);
+on(32.9, () => { pressed = false; });
+on(33.2, () => showKeys(["Ctrl", "C"], 1.2));
+on(33.5, () => {
+  shiftTarget = 0;
+  newNote = makeCard({ img: makeNote({ kind: "text", text: "周五发布 0.1.1，记得更新日志和商店截图", source: "记事本", when: "刚刚" }), kind: "text", side: "notes", search: "周五发布 0.1.1，记得更新日志和商店截图" });
+  order.notes.unshift(newNote); relayout(); newNote.x = newNote.tx; newNote.state = "fall"; newNote.fy = -320; newNote.fvy = 0;
+});
+at(34.4, [738, 528]);
+// —— 8：类型
+at(35.6, [1100, 560]);
+on(36.0, () => { order.notes.forEach((c, i) => later(.2 + i * .22, () => { c.label = true; })); });
+on(39.2, () => { order.notes.forEach(c => { c.label = false; }); });
+at(37.5, [1500, 470]);
+at(39.0, [1250, 560]);
+// —— 9：搜索
+const searchPos = () => [W / 2 + 116 + 12 + 22 - searchT * 150, ROPE_TOP + shift + 358];
+at(40.2, searchPos);
+at(40.5, searchPos);
+on(40.5, () => { click(...mouse); searchOpen = true; });
+at(41.0, () => [W / 2 + 300, ROPE_TOP + shift + 470]);
+const typed = (s) => () => {
+  query = s; searchCount = null;
+  if (!s) { order.notes.forEach(c => c.hidden = false); }
+  else {
+    const qs = s.toLowerCase().split(/\s+/).filter(Boolean);
+    order.notes.forEach(c => c.hidden = !qs.every(q => c.search.includes(q)));
+    searchCount = order.notes.filter(c => !c.hidden).length;
+  }
+  relayout();
+};
+on(41.3, typed("c")); on(41.55, typed("cl")); on(41.8, typed("cli")); on(42.05, typed("clip"));
+on(43.7, () => showKeys(["Esc"], .9));
+on(43.95, () => { typed("")(); searchOpen = false; });
+// —— 10：双击看全文
+at(44.6, () => [W / 2 + 300, ROPE_TOP + shift + 470]);
+at(45.4, () => cardPoint(codeNote, 0, 90));
+at(46.0, () => cardPoint(codeNote, 0, 90));
+on(45.55, () => { click(...mouse); codeNote.press = 1; });
+on(45.72, () => { click(...mouse); codeNote.press = 1; reader = codeNote; readerTarget = 1; });
+at(46.4, [1380, 760]);
+at(47.9, [1380, 760]);
+on(48.0, () => showKeys(["Esc"], .9));
+on(48.3, () => { readerTarget = 0; });
+at(49.2, [1100, 700]);
+on(49.3, () => { shiftTarget = HIDDEN; });
+at(50.0, [1100, 700]);
+
+let snipOn = false, searchOpen = false;
+
+// ───────────────────────── 每一帧 ─────────────────────────
+function update() {
+  T += DT;
+  events.sort((a, b) => a.t - b.t);
+  while (events.length && events[0].t <= T) events.shift().fn();
+
+  const prev = mouse;
+  mouse = cursorAt(T);
+  mouseV = [(mouse[0] - prev[0]) / DT, (mouse[1] - prev[1]) / DT];
+  cursorShown = Math.min(seg(T, 3.4, 3.9), 1 - seg(T, 49.6, 50.1));
+
+  // 动画量
+  const k = Math.min(1, DT * 10);
+  snip += ((snipOn ? 1 : 0) - snip) * k;
+  if (snipRect && pressed) { snipRect.w = mouse[0] - snipRect.x; snipRect.h = mouse[1] - snipRect.y; }
+  flash = Math.max(0, flash - DT * 4);
+  sideT = clamp(sideT + (side === "notes" ? 1 : -1) * DT * 4, 0, 1);
+  searchT += ((searchOpen ? 1 : 0) - searchT) * Math.min(1, DT * 9);
+  readerT += (readerTarget - readerT) * Math.min(1, DT * 7);
+  editSel = T > 32 && T < 33.4 ? seg(T, 32.0, 32.9) : T >= 33.4 && T < 36 ? 1 : 0;
+  if (chatImageT > 0) chatImageT = Math.min(1, chatImageT + DT * 3);
+  if (chatReplyT > 0) chatReplyT = Math.min(1, chatReplyT + DT * 3);
+  const overChat = dragCard && mouse[0] > CHAT.x && mouse[0] < CHAT.x + CHAT.w && mouse[1] > CHAT.y && mouse[1] < CHAT.y + CHAT.h;
+  chatDrop += ((overChat ? 1 : 0) - chatDrop) * k;
+
+  // 绳子整体滑下/收起：带一点回弹的弹簧
+  const sa = 60 * (shiftTarget - shift) - 12 * shiftV;
+  shiftAcc = sa;
+
+  // 鼠标扫过卡片 / 绳子
+  for (const c of cards) {
+    if (c.state !== "hang" || c.alpha < .3) continue;
+    const hit = inside(c, mouse[0], mouse[1]) && cursorShown > .5 && !dragCard && readerT < .1;
+    c.hover += ((hit ? 1 : 0) - c.hover) * Math.min(1, DT * 12);
+    c.lift = c.hover;
+    if (hit && ((T > 23.4 && T < 26.8) || (T > 35.6 && T < 39.4))) {
+      const [, ly] = toLocal(c, mouse[0], mouse[1]);
+      c.om += -mouseV[0] * Math.abs(mouseV[0]) * 1.7e-6 * (ly / c.L);
+    }
+    c.press = Math.max(0, c.press - DT * 5);
+    c.labelT = clamp(c.labelT + (c.label ? 1 : -1) * DT * 5, 0, 1);
+  }
+  const ropeNow = ropeWorldY(mouse[0]), ropePrev = ropeWorldY(prev[0]);
+  if (cursorShown > .5 && (prev[1] - ropePrev) * (mouse[1] - ropeNow) < 0) kickRope(mouse[0], clamp(mouseV[1] * .35 + Math.abs(mouseV[0]) * .05, -260, 260), 3);
+
+  const h = DT / SUB;
+  for (let s = 0; s < SUB; s++) {
+    shiftV += sa * h; shift += shiftV * h;
+    stepRope(h);
+    for (const c of cards) stepCard(c, h);
+  }
+}
+
+function render() {
+  drawDesktop();
+  drawRope();
+  for (const c of [...cards].sort((a, b) => b.x - a.x)) drawCard(c);
+  drawToggle();
+  drawReader();
+  drawSnip();
+  if (dragCard) {
+    const im = dragCard.img, w = 150, hh = w * im.height / im.width;
+    X.save(); X.globalAlpha = .9; X.translate(mouse[0] + 14, mouse[1] + 18); X.rotate(-.04);
+    X.shadowColor = "rgba(0,0,0,.35)"; X.shadowBlur = 24; X.shadowOffsetY = 10;
+    X.fillStyle = "#fff"; rr(-5, -5, w + 10, hh + 10, 8); X.fill(); X.shadowColor = "transparent";
+    X.drawImage(im, 0, 0, w, hh); X.restore();
+  }
+  drawToast();
+  drawKeys();
+  drawCaption();
+  drawCursor();
+  if (flash > 0) { X.fillStyle = `rgba(255,255,255,${flash * .85})`; X.fillRect(0, 0, W, H); }
+  drawTitle(1 - seg(T, 3.0, 3.6), false);
+  drawTitle(seg(T, 50.0, 50.6), true);
+}
+
+// 先让绳子和照片在屏幕外静下来
+(function warm() {
+  const t0 = T;
+  for (let i = 0; i < FPS * 4; i++) {
+    const h = DT / SUB;
+    for (let s = 0; s < SUB; s++) { stepRope(h); for (const c of cards) stepCard(c, h); }
+  }
+  T = t0;
+})();
+
+window.frame = () => { update(); render(); return T; };
+window.duration = END;
+window.ready = new Promise(r => { if (logo.complete) r(); else { logo.onload = r; logo.onerror = r; } }).then(() => document.fonts.ready);
+
+if (!params.has("capture")) {
+  window.ready.then(() => {
+    let acc = 0, last = performance.now();
+    const loop = now => {
+      acc += Math.min(.1, (now - last) / 1000); last = now;
+      while (acc >= DT) { acc -= DT; if (T >= END) { location.reload(); return; } update(); }
+      render(); requestAnimationFrame(loop);
+    };
+    render(); requestAnimationFrame(loop);
+  });
+}
+</script>
+</body>
+</html>

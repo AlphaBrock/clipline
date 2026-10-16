@@ -12,6 +12,14 @@
 <p align="center">
   Windows 10 2004 及以上 / Windows 11 · x64 与 ARM64 · WinUI 3 + .NET 10
 </p>
+<p align="center">
+  <a href="docs/demo/clipline-demo.mp4">
+    <img src="docs/demo/clipline-demo-preview.gif" width="800" alt="Clipline 演示：鼠标碰顶边，晾衣绳滑下来；截图后新照片落到绳上">
+  </a>
+  <br>
+  <sub>点击观看完整演示视频（55 秒）</sub>
+</p>
+
 
 ---
 
