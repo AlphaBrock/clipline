@@ -471,6 +471,8 @@ public sealed partial class LineWindow : Window
         shown = false;
         Reader.Close(now: true);
         CloseSearch();
+        // Tucked away, the pointer may have left a card without saying so.
+        foreach (var peg in pegs.Values) peg.Steady = false;
         rope.PlaceStrip(-StripHeight);
         Strip.Translation = new Vector3(0, (float)-StripHeight, 0);
         AppWindow.Hide();
@@ -510,6 +512,7 @@ public sealed partial class LineWindow : Window
         card.PinToggled += () => TogglePin(card);
         card.DraggingChanged += dragging => drags = Math.Max(0, drags + (dragging ? 1 : -1));
         card.Pressed += down => { peg.ScaleTarget = down ? 0.965 : 1; Wake(); };
+        HoldStill(card, peg);
         card.Poked += at => { rope.Poke(peg, at); Wake(); };
         card.Opacity = 0;
         rope.Pegs.Add(peg);
@@ -777,6 +780,7 @@ public sealed partial class LineWindow : Window
         note.ReadRequested += () => Read(note);
         note.DraggingChanged += dragging => drags = Math.Max(0, drags + (dragging ? 1 : -1));
         note.Pressed += down => { peg.ScaleTarget = down ? 0.965 : 1; Wake(); };
+        HoldStill(note, peg);
         note.Poked += at => { rope.Poke(peg, at); Wake(); };
         note.Resized += () => { peg.Reshape(note.CardHeight); Relayout(); };
         note.PinChanged += () =>
@@ -790,6 +794,19 @@ public sealed partial class LineWindow : Window
         rope.Pegs.Add(peg);
         pegs[note] = peg;
         return note;
+    }
+
+    /// A card stops swinging while the pointer is over it, to be looked at.
+    private void HoldStill(UIElement card, Rope.Peg peg)
+    {
+        void Steady(bool on)
+        {
+            peg.Steady = on;
+            Wake();
+        }
+        card.PointerEntered += (_, _) => Steady(true);
+        card.PointerExited += (_, _) => Steady(false);
+        card.PointerCanceled += (_, _) => Steady(false);
     }
 
     /// Off the line: deleted from the history, it drops away.

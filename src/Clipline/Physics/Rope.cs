@@ -103,6 +103,9 @@ public sealed class Rope
 
         /// The swing: clockwise from hanging straight down, in radians.
         public double Angle, Spin;
+        /// Under the pointer: it stops swinging and hangs straight, so it
+        /// can be looked at, and neither wind nor pointer sets it going.
+        public bool Steady;
         /// Pressed with the pointer it gives a little, then springs back.
         public double Scale = 1, ScaleTarget = 1;
         internal double ScaleVelocity;
@@ -403,7 +406,7 @@ public sealed class Rope
 
         foreach (var peg in Pegs)
         {
-            if (!peg.OnRope(width) || peg.ShownOpacity < 0.5) continue;
+            if (!peg.OnRope(width) || peg.ShownOpacity < 0.5 || peg.Steady) continue;
             // The pointer in the card's own frame.
             double dx = p.X - peg.PivotX, dy = p.Y - peg.PivotY;
             double c = Math.Cos(-peg.Angle), s = Math.Sin(-peg.Angle);
@@ -585,7 +588,7 @@ public sealed class Rope
     {
         double sin = Math.Sin(peg.Angle), cos = Math.Cos(peg.Angle);
         double alpha;
-        if (reduced)
+        if (reduced || peg.Steady)
         {
             // Back to hanging straight, without overshooting.
             double w = Math.Sqrt(Gravity * peg.Reach / peg.Gyration);
